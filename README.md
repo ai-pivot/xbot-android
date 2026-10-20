@@ -1,6 +1,6 @@
 # xbot-android
 
-A pure-native Android client for [xbot](../xbot), built with Kotlin + Jetpack Compose.
+A pure-native Android client for the xbot server, built with Kotlin + Jetpack Compose.
 
 It talks to an **unmodified xbot server** over the existing web surface:
 

@@ -29,7 +29,11 @@ if [ -z "$BASE" ]; then
   echo "XBOT_UPDATE_BASE is required, e.g. https://your-host/xbot/android" >&2
   exit 1
 fi
-TARGET="${XBOT_MC_TARGET:-xbotlan/uploads/share/android}"
+TARGET="${XBOT_MC_TARGET:-}"
+if [ -z "$TARGET" ]; then
+  echo "XBOT_MC_TARGET is required, e.g. my-minio/xbot/android" >&2
+  exit 1
+fi
 OBJECT="xbot-android-${VERSION_CODE}.apk"
 CHANGELOG="${CHANGELOG:-}"
 
