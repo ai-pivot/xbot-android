@@ -225,7 +225,9 @@ class XbotApi(private val prefs: AppPrefs) {
             put("method", method)
             put("params", params)
         }.toString()
-        return XbotJson.parseToJsonElement(execute(post("/api/rpc", body)))
+        return unwrapRpcEnvelope(
+            XbotJson.parseToJsonElement(execute(post("/api/rpc", body))),
+        )
     }
 
     suspend fun getActiveProgress(chatId: String, channel: String = "web"): ProgressEvent? {
@@ -433,3 +435,21 @@ class XbotApi(private val prefs: AppPrefs) {
 data class CreateChatResponse(
     @kotlinx.serialization.SerialName("chat_id") val chatId: String = "",
 )
+
+/**
+ * The REST bridge wraps every successful `/api/rpc` result in the standard
+ * `{ok:true,data:<result>,error:null}` envelope (writeJSON in web_auth.go).
+ * Raw arrays such as `list_all_model_entries` therefore arrive as
+ * `{ok:true,data:[...]}`; decoding the envelope itself as a List produces
+ * "Expected JsonArray, but had JsonObject". Unwrap only when the shape is the
+ * known envelope so plain object results stay untouched.
+ */
+internal fun unwrapRpcEnvelope(element: JsonElement): JsonElement {
+    if (element is JsonObject &&
+        element["ok"]?.jsonPrimitive?.content == "true" &&
+        element.containsKey("data")
+    ) {
+        return element["data"] ?: JsonNull
+    }
+    return element
+}
