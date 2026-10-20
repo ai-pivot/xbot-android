@@ -1,0 +1,272 @@
+package dev.xbot.android.chat
+
+import dev.xbot.android.data.HistoryIteration
+import dev.xbot.android.data.HistoryMessage
+import dev.xbot.android.data.HistoryResponse
+import dev.xbot.android.data.ProgressEvent
+import dev.xbot.android.data.SessionEvent
+import dev.xbot.android.data.WsMessage
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ChatReducerTest {
+
+    @Test
+    fun `history builds one turn per turn id`() {
+        val state = ChatReducer.withHistory(
+            ChatReducer.empty("chat_1", "web"),
+            HistoryResponse(
+                ok = true,
+                messages = listOf(
+                    HistoryMessage(id = 1, role = "user", content = "hello", turnId = 7),
+                    HistoryMessage(
+                        id = 2,
+                        role = "assistant",
+                        content = "done",
+                        turnId = 7,
+                        iterations = listOf(
+                            HistoryIteration(iteration = 1, content = "step one"),
+                            HistoryIteration(iteration = 2, content = "step two"),
+                        ),
+                    ),
+                ),
+                hasMore = true,
+                oldestId = 1,
+            ),
+        )
+
+        assertEquals(1, state.turns.size)
+        val turn = state.turns.single()
+        assertEquals(7L, turn.turnId)
+        assertEquals("hello", turn.userText)
+        assertEquals("done", turn.finalText)
+        assertEquals(listOf(1, 2), turn.iterations.map { it.index })
+        assertTrue(state.hasMore)
+        assertFalse(state.loading)
+    }
+
+    @Test
+    fun `stream delta appends and checkpoint replaces`() {
+        var state = ChatReducer.empty("chat_1", "web")
+        state = ChatReducer.applyProgress(
+            state,
+            ProgressEvent(
+                turnId = 5,
+                iteration = 1,
+                streamDelta = "Hel",
+                phase = "thinking",
+            ),
+        )
+        state = ChatReducer.applyProgress(
+            state,
+            ProgressEvent(turnId = 5, iteration = 1, streamDelta = "lo", phase = "thinking"),
+        )
+        assertEquals("Hello", state.turns.single().iterations.single().content)
+
+        state = ChatReducer.applyProgress(
+            state,
+            ProgressEvent(turnId = 5, iteration = 1, streamContent = "Hello world"),
+        )
+        assertEquals("Hello world", state.turns.single().iterations.single().content)
+    }
+
+    @Test
+    fun `phase done keeps the last iteration and clears busy`() {
+        var state = ChatReducer.empty("chat_1", "web")
+        state = ChatReducer.applyProgress(
+            state,
+            ProgressEvent(
+                turnId = 3,
+                iteration = 2,
+                content = "final answer",
+                streamContent = "final answer",
+                phase = "thinking",
+            ),
+        )
+        assertTrue(state.busy)
+
+        state = ChatReducer.applyProgress(
+            state,
+            ProgressEvent(turnId = 3, iteration = 2, phase = "done"),
+        )
+
+        assertFalse(state.busy)
+        val iteration = state.turns.single().iterations.single()
+        assertEquals("final answer", iteration.content)
+        assertTrue(iteration.done)
+        assertEquals(0L, state.liveTurnId)
+    }
+
+    @Test
+    fun `text event commits the reply and never clears prior content`() {
+        var state = ChatReducer.applyProgress(
+            ChatReducer.empty("chat_1", "web"),
+            ProgressEvent(
+                turnId = 9,
+                iteration = 1,
+                streamContent = "streamed body",
+                phase = "thinking",
+            ),
+        )
+        state = ChatReducer.applyEvent(
+            state,
+            WsMessage(type = "text", turnId = 9, content = "final body"),
+        )
+
+        assertEquals("final body", state.turns.single().finalText)
+        assertEquals("streamed body", state.turns.single().iterations.single().content)
+        assertFalse(state.busy)
+    }
+
+    @Test
+    fun `session idle clears busy without deleting the turn`() {
+        var state = ChatReducer.applyProgress(
+            ChatReducer.empty("chat_1", "web"),
+            ProgressEvent(turnId = 2, iteration = 1, streamDelta = "x", phase = "thinking"),
+        )
+        state = ChatReducer.applyEvent(
+            state,
+            WsMessage(
+                type = "session",
+                session = SessionEvent(chatId = "chat_1", action = "idle"),
+            ),
+        )
+
+        assertFalse(state.busy)
+        assertEquals(1, state.turns.size)
+    }
+
+    @Test
+    fun `ask user prompt is parsed from progress and resolved event clears it`() {
+        var state = ChatReducer.applyEvent(
+            ChatReducer.empty("chat_1", "web"),
+            WsMessage(
+                type = "ask_user",
+                progress = ProgressEvent(
+                    turnId = 4,
+                    requestId = "req-1",
+                    questions = listOf(
+                        dev.xbot.android.data.AskUserQuestion(
+                            question = "pick one",
+                            options = listOf("a", "b"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        assertNotNull(state.askUser)
+        assertEquals("req-1", state.askUser?.requestId)
+
+        state = ChatReducer.applyEvent(
+            state,
+            WsMessage(type = "ask_user_resolved", requestId = "req-1", reason = "answered"),
+        )
+        assertNull(state.askUser)
+    }
+
+    @Test
+    fun `send accepted creates an optimistic turn that events merge into`() {
+        var state = ChatReducer.empty("chat_1", "web")
+        state = ChatReducer.sendAccepted(state, "hello", turnId = 11, queued = false)
+        assertEquals(1, state.turns.size)
+        assertEquals("hello", state.turns.single().userText)
+        assertTrue(state.busy)
+
+        state = ChatReducer.applyEvent(
+            state,
+            WsMessage(type = "user_echo", turnId = 11, content = "hello"),
+        )
+        assertEquals(1, state.turns.size)
+        assertEquals("hello", state.turns.single().userText)
+        assertNull(state.pendingUserText)
+    }
+
+    @Test
+    fun `iteration history delta merges by iteration number`() {
+        var state = ChatReducer.empty("chat_1", "web")
+        state = ChatReducer.applyProgress(
+            state,
+            ProgressEvent(
+                turnId = 1,
+                iteration = 2,
+                iterationHistory = listOf(
+                    ProgressEvent(iteration = 1, content = "one"),
+                ),
+                phase = "thinking",
+            ),
+        )
+        state = ChatReducer.applyProgress(
+            state,
+            ProgressEvent(
+                turnId = 1,
+                iteration = 2,
+                iterationHistory = listOf(
+                    ProgressEvent(iteration = 1, content = "one"),
+                    ProgressEvent(iteration = 2, content = "two"),
+                ),
+                phase = "thinking",
+            ),
+        )
+
+        assertEquals(listOf(1, 2), state.turns.single().iterations.map { it.index })
+        assertEquals("one", state.turns.single().iterations[0].content)
+        assertEquals("two", state.turns.single().iterations[1].content)
+    }
+
+    @Test
+    fun `tool progress merges by call id and updates status`() {
+        var state = ChatReducer.empty("chat_1", "web")
+        state = ChatReducer.applyProgress(
+            state,
+            ProgressEvent(
+                turnId = 1,
+                iteration = 1,
+                activeTools = listOf(
+                    dev.xbot.android.data.ToolProgress(
+                        name = "Shell",
+                        callId = "call-1",
+                        status = "running",
+                        args = "{\"cmd\":\"ls\"}",
+                    ),
+                ),
+                phase = "tool_exec",
+            ),
+        )
+        state = ChatReducer.applyProgress(
+            state,
+            ProgressEvent(
+                turnId = 1,
+                iteration = 1,
+                completedTools = listOf(
+                    dev.xbot.android.data.ToolProgress(
+                        name = "Shell",
+                        callId = "call-1",
+                        status = "done",
+                        detail = "file.txt",
+                    ),
+                ),
+                phase = "thinking",
+            ),
+        )
+
+        val tools = state.turns.single().iterations.single().tools
+        assertEquals(1, tools.size)
+        assertEquals("done", tools.single().status)
+        assertEquals("file.txt", tools.single().detail)
+        assertEquals("{\"cmd\":\"ls\"}", tools.single().args)
+    }
+
+    @Test
+    fun `command reply without turn id becomes a standalone turn`() {
+        val state = ChatReducer.applyEvent(
+            ChatReducer.empty("chat_1", "web"),
+            WsMessage(type = "text", turnId = 0, content = "pwd output"),
+        )
+        assertEquals(1, state.turns.size)
+        assertEquals("pwd output", state.turns.single().finalText)
+    }
+}

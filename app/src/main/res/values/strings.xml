@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">xbot</string>
+    <string name="notification_channel_name">xbot 会话</string>
+    <string name="notification_channel_desc">会话完成与需要你回答的问题</string>
+    <string name="notification_service_channel_name">xbot 后台连接</string>
+    <string name="notification_service_channel_desc">保持与 xbot 服务端的连接以接收消息通知</string>
+</resources>

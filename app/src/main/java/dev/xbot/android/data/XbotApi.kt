@@ -1,0 +1,333 @@
+package dev.xbot.android.data
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
+
+/**
+ * REST + RPC client for the existing xbot web channel.
+ *
+ * No server-side RPC changes are required: this speaks the same surface the
+ * React web client uses (POST /api endpoints, POST /api/rpc, GET /api/sse).
+ */
+class XbotApi(private val prefs: AppPrefs) {
+
+    private val cookieJar = PersistentCookieJar(prefs)
+
+    val client: OkHttpClient = OkHttpClient.Builder()
+        .cookieJar(cookieJar)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .writeTimeout(90, TimeUnit.SECONDS)
+        .build()
+
+    /** Long-lived SSE client: no read timeout, EventSource owns the connection. */
+    val sseClient: OkHttpClient = client.newBuilder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .build()
+
+    fun baseUrl(): String = normalizeBaseUrl(prefs.serverUrl)
+
+    fun hasServer(): Boolean = baseUrl().isNotBlank()
+
+    fun clearSession() = cookieJar.clear()
+
+    // ------------------------------------------------------------------
+    // Auth
+    // ------------------------------------------------------------------
+
+    suspend fun authConfig(): AuthConfig {
+        val text = execute(post("/api/auth/config", "{}"))
+        return decodeEnvelope<AuthConfig>(text)
+    }
+
+    suspend fun login(username: String, password: String) {
+        val body = XbotJson.encodeToString(LoginRequest(username.trim(), password))
+        val text = execute(post("/api/auth/login", body))
+        decodeEnvelope<AuthResponse>(text)
+        prefs.secrets.put(username.trim(), password)
+    }
+
+    /** First-user bootstrap (server allows it only while web_users is empty). */
+    suspend fun register(username: String, password: String) {
+        val body = XbotJson.encodeToString(LoginRequest(username.trim(), password))
+        execute(post("/api/auth/register", body))
+        // Registration only creates the account; establish the session cookie.
+        login(username, password)
+    }
+
+    suspend fun logout() {
+        runCatching { execute(post("/api/auth/logout", "{}")) }
+        clearSession()
+        prefs.secrets.clear()
+    }
+
+    /** Try a stored credential login. Returns true when the cookie is valid again. */
+    suspend fun trySilentLogin(): Boolean {
+        val user = prefs.secrets.username()
+        val pass = prefs.secrets.password() ?: return false
+        if (user.isBlank()) return false
+        return runCatching {
+            login(user, pass)
+            true
+        }.getOrDefault(false)
+    }
+
+    // ------------------------------------------------------------------
+    // Sessions & history
+    // ------------------------------------------------------------------
+
+    suspend fun sessionTree(): SessionTreeResponse =
+        decodeEnvelope(execute(post("/api/session-tree", "{}")))
+
+    suspend fun chats(): ChatsResponse =
+        decodeEnvelope(execute(post("/api/chats/list", "{}")))
+
+    suspend fun createChat(label: String): String {
+        val body = buildJsonObject { put("label", label) }.toString()
+        return decodeEnvelope<CreateChatResponse>(execute(post("/api/chats/create", body))).chatId
+    }
+
+    suspend fun switchChat(chatId: String, channel: String = "web") {
+        val url = urlBuilder("/api/chats/${encodePath(chatId)}/switch")
+            .addQueryParameter("channel", channel)
+            .build()
+        execute(Request.Builder().url(url).post("{}".toRequestBody(JSON)).build())
+    }
+
+    suspend fun deleteChat(chatId: String, channel: String = "web") {
+        val body = buildJsonObject { put("channel", channel) }.toString()
+        execute(post("/api/chats/${encodePath(chatId)}/delete", body))
+    }
+
+    suspend fun renameChat(chatId: String, label: String, channel: String = "web") {
+        val url = urlBuilder("/api/chats/${encodePath(chatId)}/rename")
+            .addQueryParameter("channel", channel)
+            .build()
+        val body = buildJsonObject { put("label", label) }.toString()
+        execute(Request.Builder().url(url).post(body.toRequestBody(JSON)).build())
+    }
+
+    suspend fun history(
+        chatId: String,
+        channel: String = "web",
+        limit: Int = 40,
+        beforeId: Long = 0,
+    ): HistoryResponse {
+        val body = buildJsonObject {
+            put("chat_id", chatId)
+            put("channel", channel)
+            put("limit", limit)
+            put("before_id", beforeId)
+        }.toString()
+        return decodeEnvelope(execute(post("/api/history", body)))
+    }
+
+    // ------------------------------------------------------------------
+    // Sending / control
+    // ------------------------------------------------------------------
+
+    suspend fun sendMessage(
+        content: String,
+        chatId: String,
+        channel: String = "web",
+        uploadKeys: List<String> = emptyList(),
+        fileNames: List<String> = emptyList(),
+        fileSizes: List<Long> = emptyList(),
+        fileMimes: List<String> = emptyList(),
+        requestId: String = "",
+        interrupt: Boolean = false,
+    ): SendMessageResponse {
+        val req = SendMessageRequest(
+            content = content,
+            chatId = chatId,
+            channel = channel,
+            uploadKeys = uploadKeys,
+            fileNames = fileNames,
+            fileSizes = fileSizes,
+            fileMimes = fileMimes,
+            id = requestId.ifBlank { null },
+            interrupt = interrupt,
+        )
+        val body = XbotJson.encodeToString(req)
+        return decodeEnvelope(execute(post("/api/message", body)))
+    }
+
+    suspend fun cancel(chatId: String, channel: String = "web") {
+        val body = buildJsonObject {
+            put("chat_id", chatId)
+            put("channel", channel)
+        }.toString()
+        execute(post("/api/cancel", body))
+    }
+
+    suspend fun respondAskUser(
+        chatId: String,
+        answers: Map<String, String>,
+        cancelled: Boolean = false,
+        channel: String = "web",
+    ) {
+        val body = XbotJson.encodeToString(
+            AskUserRequest(
+                channel = channel,
+                chatId = chatId,
+                answers = answers,
+                cancelled = cancelled,
+            ),
+        )
+        execute(post("/api/ask_user/respond", body))
+    }
+
+    suspend fun uploadFile(
+        bytes: ByteArray,
+        fileName: String,
+        mime: String,
+    ): UploadResponse {
+        val part = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart(
+                "file",
+                fileName,
+                bytes.toRequestBody(mime.toMediaType()),
+            )
+            .build()
+        val text = execute(
+            Request.Builder()
+                .url(urlBuilder("/api/files/upload").build())
+                .post(part)
+                .build(),
+        )
+        return decodeEnvelope(text)
+    }
+
+    // ------------------------------------------------------------------
+    // RPC (existing /api/rpc dispatch table — unchanged)
+    // ------------------------------------------------------------------
+
+    suspend fun rpc(method: String, params: JsonObject = JsonObject(emptyMap())): JsonElement {
+        val body = buildJsonObject {
+            put("method", method)
+            put("params", params)
+        }.toString()
+        return XbotJson.parseToJsonElement(execute(post("/api/rpc", body)))
+    }
+
+    suspend fun getActiveProgress(chatId: String, channel: String = "web"): ProgressEvent? {
+        val result = rpc(
+            "get_active_progress",
+            buildJsonObject {
+                put("channel", channel)
+                put("chat_id", chatId)
+                put("from_iteration", 0)
+            },
+        )
+        return if (result is JsonNull) null else runCatching {
+            XbotJson.decodeFromJsonElement(ProgressEvent.serializer(), result)
+        }.getOrNull()
+    }
+
+    suspend fun getPendingAskUser(chatId: String, channel: String = "web"): ProgressEvent? {
+        val result = rpc(
+            "get_pending_ask_user",
+            buildJsonObject {
+                put("channel", channel)
+                put("chat_id", chatId)
+            },
+        )
+        return if (result is JsonNull) null else runCatching {
+            XbotJson.decodeFromJsonElement(ProgressEvent.serializer(), result)
+        }.getOrNull()
+    }
+
+    // ------------------------------------------------------------------
+    // Plumbing
+    // ------------------------------------------------------------------
+
+    suspend fun ensureAuth(): Boolean {
+        if (!hasServer()) return false
+        // A cheap authenticated call: if the cookie is still valid this succeeds.
+        return runCatching { sessionTree(); true }.getOrElse { e ->
+            if (e is UnauthorizedException) trySilentLogin() else false
+        }
+    }
+
+    private suspend fun execute(request: Request): String = withContext(Dispatchers.IO) {
+        client.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val error = runCatching {
+                    XbotJson.decodeFromString<ApiEnvelope<JsonElement>>(text).error
+                }.getOrNull()
+                if (response.code == 401) {
+                    throw UnauthorizedException(error?.message ?: "登录已失效，请重新登录")
+                }
+                throw ApiException(
+                    code = error?.code ?: "http_${response.code}",
+                    message = error?.message ?: "HTTP ${response.code}",
+                    httpStatus = response.code,
+                )
+            }
+            text
+        }
+    }
+
+    private inline fun <reified T> decodeEnvelope(text: String): T {
+        val env = XbotJson.decodeFromString<ApiEnvelope<T>>(text)
+        if (!env.ok) {
+            val message = env.error?.message ?: "请求失败"
+            if (env.error?.code == "unauthorized") throw UnauthorizedException(message)
+            throw ApiException(env.error?.code ?: "error", message)
+        }
+        return env.data ?: throw ApiException("empty_response", "服务端返回空数据")
+    }
+
+    private fun get(path: String): Request =
+        Request.Builder().url(urlBuilder(path).build()).get().build()
+
+    private fun post(path: String, body: String): Request =
+        Request.Builder()
+            .url(urlBuilder(path).build())
+            .post(body.toRequestBody(JSON))
+            .build()
+
+    private fun urlBuilder(path: String): okhttp3.HttpUrl.Builder =
+        (
+            (normalizeBaseUrl(prefs.serverUrl) + path).toHttpUrlOrNull()
+                ?: throw ApiException("bad_url", "服务器地址无效：${prefs.serverUrl}")
+            ).newBuilder()
+
+    private fun encodePath(value: String): String =
+        java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
+    companion object {
+        private val JSON = "application/json; charset=utf-8".toMediaType()
+
+        fun normalizeBaseUrl(raw: String): String {
+            var value = raw.trim().trimEnd('/')
+            if (value.isBlank()) return ""
+            if (!value.startsWith("http://") && !value.startsWith("https://")) {
+                value = "http://$value"
+            }
+            return value
+        }
+    }
+}
+
+@kotlinx.serialization.Serializable
+data class CreateChatResponse(
+    @kotlinx.serialization.SerialName("chat_id") val chatId: String = "",
+)
