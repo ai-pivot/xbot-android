@@ -74,6 +74,7 @@ fun XbotNavHost() {
             SettingsScreen(
                 onBack = { nav.popBackStack() },
                 onOpenTools = { nav.navigate("tools") },
+                onOpenModels = { nav.navigate("models") },
                 onLogout = {
                     nav.navigate("login") {
                         popUpTo("sessions") { inclusive = true }
@@ -84,6 +85,12 @@ fun XbotNavHost() {
 
         composable("tools") {
             ToolsScreen(
+                onBack = { nav.popBackStack() },
+            )
+        }
+
+        composable("models") {
+            ModelSettingsScreen(
                 onBack = { nav.popBackStack() },
             )
         }

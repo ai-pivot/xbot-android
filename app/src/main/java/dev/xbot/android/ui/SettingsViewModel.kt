@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dev.xbot.android.XbotApp
 import dev.xbot.android.data.DefaultModel
 import dev.xbot.android.data.ModelEntry
+import dev.xbot.android.data.Subscription
 import dev.xbot.android.data.ToolSetting
 import dev.xbot.android.data.UnauthorizedException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,10 +16,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class SettingsUiState(
-    val loading: Boolean = true,
+    val loading: Boolean = false,
     val saving: Boolean = false,
     val error: String? = null,
     val models: List<ModelEntry> = emptyList(),
+    val subscriptions: List<Subscription> = emptyList(),
     val defaultSubId: String = "",
     val defaultModel: String = "",
     val thinkingMode: String = "auto",
@@ -43,6 +45,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(loading = true, error = null) }
             try {
                 val models = withAuthRetry { api.listModelEntries() }
+                val subscriptions = withAuthRetry { api.listSubscriptions() }
                 val default = withAuthRetry { api.getDefaultModel() }
                 val thinking = withAuthRetry { api.getThinkingMode() }
                 val context = withAuthRetry { api.getContextMode() }
@@ -57,6 +60,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                     saving = false,
                     error = null,
                     models = models,
+                    subscriptions = subscriptions,
                     defaultSubId = default.subId,
                     defaultModel = default.model,
                     thinkingMode = normalizeThinking(thinking),
@@ -154,6 +158,36 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                 current.copy(
                     tools = current.tools.map {
                         if (it.name == tool.name) it.copy(enabled = enabled) else it
+                    },
+                )
+            }
+        }
+    }
+
+    fun toggleSubscription(sub: Subscription, enabled: Boolean) {
+        save {
+            api.setSubscriptionEnabled(sub.id, enabled)
+            _state.update { current ->
+                current.copy(
+                    subscriptions = current.subscriptions.map {
+                        if (it.id == sub.id) it.copy(enabled = enabled) else it
+                    },
+                )
+            }
+        }
+    }
+
+    fun toggleModel(entry: ModelEntry, enabled: Boolean) {
+        save {
+            api.setModelEnabled(entry.subId, entry.model, enabled)
+            _state.update { current ->
+                current.copy(
+                    models = current.models.map {
+                        if (it.subId == entry.subId && it.model == entry.model) {
+                            it.copy(status = if (enabled) "normal" else "disabled")
+                        } else {
+                            it
+                        }
                     },
                 )
             }

@@ -264,6 +264,30 @@ class XbotApi(private val prefs: AppPrefs) {
     suspend fun listModelEntries(): List<ModelEntry> =
         decodeRpc("list_all_model_entries")
 
+    suspend fun listSubscriptions(): List<Subscription> =
+        decodeRpc("list_subscriptions")
+
+    suspend fun setSubscriptionEnabled(subId: String, enabled: Boolean) {
+        rpc(
+            "set_subscription_enabled",
+            buildJsonObject {
+                put("sub_id", subId)
+                put("enabled", enabled)
+            },
+        )
+    }
+
+    suspend fun setModelEnabled(subId: String, model: String, enabled: Boolean) {
+        rpc(
+            "set_model_enabled",
+            buildJsonObject {
+                put("sub_id", subId)
+                put("model", model)
+                put("enabled", enabled)
+            },
+        )
+    }
+
     suspend fun getSessionModel(chatId: String, channel: String = "web"): SessionModel =
         decodeRpc(
             "get_session_subscription",

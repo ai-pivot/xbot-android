@@ -63,7 +63,6 @@ import dev.xbot.android.XbotApp
 import dev.xbot.android.chat.ChatViewModel
 import dev.xbot.android.service.startNotificationService
 import dev.xbot.android.service.stopNotificationService
-import dev.xbot.android.ui.components.ModelPickerSheet
 import dev.xbot.android.update.UpdateViewModel
 import kotlinx.coroutines.launch
 
@@ -73,6 +72,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onLogout: () -> Unit,
     onOpenTools: () -> Unit,
+    onOpenModels: () -> Unit,
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as XbotApp
@@ -85,7 +85,6 @@ fun SettingsScreen(
     val updateVm: UpdateViewModel = viewModel()
     val updateState by updateVm.state.collectAsStateWithLifecycle()
     var updateUrl by remember { mutableStateOf(prefs.updateManifestUrl) }
-    var showDefaultModelPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { settingsVm.load() }
 
@@ -178,11 +177,7 @@ fun SettingsScreen(
                 InfoRow("通道", prefs.activeChannel)
             }
 
-            SettingsCard(
-                title = "模型与推理",
-                collapsible = true,
-                initiallyExpanded = false,
-            ) {
+            SettingsCard(title = "模型管理") {
                 val defaultEntry = settings.models.firstOrNull {
                     it.subId == settings.defaultSubId && it.model == settings.defaultModel
                 }
@@ -203,12 +198,21 @@ fun SettingsScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        Text(
+                            "${settings.subscriptions.size} 个订阅 · ${settings.models.size} 个模型",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                    TextButton(onClick = { showDefaultModelPicker = true }) {
-                        Text("选择")
-                    }
+                    TextButton(onClick = onOpenModels) { Text("管理") }
                 }
+            }
 
+            SettingsCard(
+                title = "推理设置",
+                collapsible = true,
+                initiallyExpanded = false,
+            ) {
                 SettingChoiceRow(
                     label = "思考模式",
                     options = listOf(
@@ -439,21 +443,6 @@ fun SettingsScreen(
                 Text("退出登录", color = MaterialTheme.colorScheme.error)
             }
         }
-    }
-
-    if (showDefaultModelPicker) {
-        ModelPickerSheet(
-            title = "选择默认模型",
-            models = settings.models,
-            currentSubId = settings.defaultSubId,
-            currentModel = settings.defaultModel,
-            loading = settings.loading,
-            onDismiss = { showDefaultModelPicker = false },
-            onSelect = { entry ->
-                showDefaultModelPicker = false
-                settingsVm.selectDefaultModel(entry)
-            },
-        )
     }
 
     message?.let { text ->

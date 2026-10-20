@@ -49,6 +49,32 @@ data class ToolSettingsResponse(
     val tools: List<ToolSetting> = emptyList(),
 )
 
+@Serializable
+data class Subscription(
+    val id: String = "",
+    val name: String = "",
+    val provider: String = "",
+    @SerialName("base_url") val baseUrl: String = "",
+    val model: String = "",
+    val active: Boolean = false,
+    val enabled: Boolean = true,
+    @SerialName("max_output_tokens") val maxOutputTokens: Int = 0,
+    @SerialName("max_context") val maxContext: Int = 0,
+    @SerialName("thinking_mode") val thinkingMode: String = "",
+    @SerialName("api_type") val apiType: String = "",
+    @SerialName("per_model_configs") val perModelConfigs: Map<String, PerModelConfig> = emptyMap(),
+)
+
+@Serializable
+data class PerModelConfig(
+    @SerialName("max_output_tokens") val maxOutputTokens: Int = 0,
+    @SerialName("max_context") val maxContext: Int = 0,
+    @SerialName("api_type") val apiType: String = "",
+    val enabled: Boolean = true,
+    val vision: Boolean = false,
+    @SerialName("vision_detail") val visionDetail: String = "",
+)
+
 data class ModelSettingsSnapshot(
     val models: List<ModelEntry> = emptyList(),
     val defaultSubId: String = "",

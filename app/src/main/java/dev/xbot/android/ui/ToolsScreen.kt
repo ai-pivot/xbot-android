@@ -42,9 +42,10 @@ fun ToolsScreen(
     val state by vm.state.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
-        if (state.tools.isEmpty() && !state.loading) {
-            vm.load()
-        }
+        // This screen owns its own SettingsViewModel (nav-scoped), so it must
+        // always hydrate; relying on the Settings screen's instance left the
+        // page stuck on the initial loading state.
+        vm.load()
     }
 
     Scaffold(
