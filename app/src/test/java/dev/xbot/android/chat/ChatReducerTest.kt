@@ -269,4 +269,56 @@ class ChatReducerTest {
         assertEquals(1, state.turns.size)
         assertEquals("pwd output", state.turns.single().finalText)
     }
+
+    @Test
+    fun `completion-only active progress does not mark an idle session busy`() {
+        val state = ChatReducer.withHistory(
+            ChatReducer.empty("chat_1", "web"),
+            HistoryResponse(
+                ok = true,
+                messages = listOf(
+                    HistoryMessage(id = 1, role = "user", content = "hi", turnId = 1),
+                    HistoryMessage(id = 2, role = "assistant", content = "hello", turnId = 1),
+                ),
+                processing = false,
+                // This is exactly what the server returns for an idle session:
+                // iteration 0, turn_id absent, phase "done".
+                activeProgress = ProgressEvent(phase = "done", todos = emptyList()),
+            ),
+        )
+
+        assertFalse(state.busy)
+        assertEquals(0L, state.liveTurnId)
+    }
+
+    @Test
+    fun `running active progress still marks the session busy`() {
+        val state = ChatReducer.withHistory(
+            ChatReducer.empty("chat_1", "web"),
+            HistoryResponse(
+                ok = true,
+                processing = false,
+                activeProgress = ProgressEvent(
+                    turnId = 5,
+                    iteration = 2,
+                    phase = "thinking",
+                    streamDelta = "partial",
+                ),
+            ),
+        )
+
+        assertTrue(state.busy)
+        assertEquals(5L, state.liveTurnId)
+        assertEquals("partial", state.turns.single().iterations.single().content)
+    }
+
+    @Test
+    fun `terminal progress with no turn id clears a stale busy flag`() {
+        val state = ChatReducer.applyProgress(
+            ChatReducer.empty("chat_1", "web").copy(busy = true),
+            ProgressEvent(iteration = 0, phase = "done"),
+        )
+
+        assertFalse(state.busy)
+    }
 }

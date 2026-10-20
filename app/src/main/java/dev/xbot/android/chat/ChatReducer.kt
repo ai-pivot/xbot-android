@@ -29,18 +29,25 @@ object ChatReducer {
         val turns = LinkedHashMap<Long, TurnUi>()
         response.messages.forEach { message -> mergeHistoryMessage(turns, message) }
 
+        // A completion-only snapshot (`{phase:"done", iteration:0, turn_id:0}`)
+        // is NOT a running turn — it is how the server restores todos/goal for an
+        // idle session. Treating "active_progress != null" as busy made every
+        // idle session render "思考中…" forever (user report 2026-10-20).
+        val active = response.activeProgress
+        val activeRunning = active != null && active.isRunning()
+
         var next = state.copy(
             loading = false,
             error = null,
             turns = turns.values.sortedBy { it.turnId },
-            busy = response.processing || response.activeProgress != null,
+            busy = response.processing || activeRunning,
             hasMore = response.hasMore,
             oldestId = response.oldestId,
             needsReload = false,
             pendingUserText = null,
         )
-        response.activeProgress?.let { progress ->
-            next = applyProgress(next, progress)
+        if (active != null && (active.turnId > 0L || activeRunning)) {
+            next = applyProgress(next, active)
         }
         return next
     }
@@ -113,7 +120,17 @@ object ChatReducer {
             next = next.copy(pendingUserText = null, liveTurnId = turnId, busy = true)
         }
 
-        if (turnId <= 0L) return next
+        if (turnId <= 0L) {
+            // No turn to attach to. A terminal snapshot still carries state
+            // (e.g. a completion-only `{phase:"done"}` snapshot) and MUST clear
+            // the busy flag; otherwise the next history load leaves the UI
+            // stuck on "思考中…".
+            return if (progress.isTerminal()) {
+                next.copy(busy = false, liveTurnId = 0L, liveIteration = 0)
+            } else {
+                next
+            }
+        }
 
         if (progress.iterationHistory.isNotEmpty()) {
             next = updateTurn(next, turnId) { turn ->
@@ -471,3 +488,9 @@ object ChatReducer {
         Json.parseToJsonElement(raw).jsonObject["request_id"]?.jsonPrimitive?.content.orEmpty()
     }.getOrDefault("")
 }
+
+private fun ProgressEvent.isTerminal(): Boolean =
+    phase == "done" || phase == "cancelled" || phase == "error"
+
+private fun ProgressEvent.isRunning(): Boolean =
+    phase.isNotBlank() && !isTerminal()
