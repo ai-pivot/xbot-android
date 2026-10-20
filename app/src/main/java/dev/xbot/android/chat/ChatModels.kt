@@ -31,6 +31,7 @@ data class IterationUi(
 data class TurnUi(
     val turnId: Long,
     val userText: String = "",
+    val userHistoryId: Long = 0L,
     val iterations: List<IterationUi> = emptyList(),
     val finalText: String = "",
     val error: String? = null,

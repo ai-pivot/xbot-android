@@ -317,13 +317,23 @@ object ChatReducer {
 
         when (message.role) {
             "user" -> {
-                if (message.content.isNotBlank()) turns[message.turnId] = turn.copy(userText = message.content)
+                val historyId = message.historyId.takeIf { it > 0L } ?: message.id
+                turns[message.turnId] = turn.copy(
+                    userText = message.content.ifBlank { turn.userText },
+                    userHistoryId = historyId.takeIf { it > 0L } ?: turn.userHistoryId,
+                )
             }
 
             "assistant" -> {
                 var merged = turn
-                if (message.turnUser != null && merged.userText.isBlank()) {
-                    merged = merged.copy(userText = message.turnUser.content)
+                val turnUser = message.turnUser
+                if (turnUser != null) {
+                    val userHistoryId = turnUser.historyId.takeIf { it > 0L } ?: turnUser.id
+                    merged = merged.copy(
+                        userText = merged.userText.ifBlank { turnUser.content },
+                        userHistoryId = merged.userHistoryId.takeIf { it > 0L }
+                            ?: userHistoryId,
+                    )
                 }
                 if (message.iterations.isNotEmpty()) {
                     merged = merged.copy(

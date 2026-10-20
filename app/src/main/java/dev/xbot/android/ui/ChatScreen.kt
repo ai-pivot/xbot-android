@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
@@ -83,6 +84,7 @@ import dev.xbot.android.ui.components.Composer
 import dev.xbot.android.ui.components.CopyOrSelectText
 import dev.xbot.android.ui.components.MarkdownText
 import dev.xbot.android.ui.components.ModelPickerSheet
+import dev.xbot.android.ui.components.RewindDialog
 import dev.xbot.android.ui.components.ToolCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -125,6 +127,7 @@ fun ChatScreen(
     var availableModels by remember(chatId) { mutableStateOf<List<ModelEntry>>(emptyList()) }
     var modelsLoading by remember(chatId) { mutableStateOf(false) }
     var showModelPicker by remember(chatId) { mutableStateOf(false) }
+    var showRewind by remember(chatId) { mutableStateOf(false) }
 
     LaunchedEffect(chatId, channel) {
         vm.open(chatId, channel, title)
@@ -328,6 +331,12 @@ fun ChatScreen(
                                 modifier = Modifier.widthIn(max = 120.dp),
                             )
                         }
+                        IconButton(
+                            onClick = { showRewind = true },
+                            enabled = !state.busy && state.turns.any { it.userHistoryId > 0L },
+                        ) {
+                            Icon(Icons.Filled.History, contentDescription = "回退")
+                        }
                         IconButton(onClick = vm::reload) {
                             Icon(Icons.Filled.Refresh, contentDescription = "重新加载")
                         }
@@ -491,6 +500,27 @@ fun ChatScreen(
                         sessionModel = SessionModel(entry.subId, entry.model)
                     }.onFailure {
                         snackbar.showSnackbar(it.message ?: "切换模型失败")
+                    }
+                }
+            },
+        )
+    }
+
+    if (showRewind) {
+        RewindDialog(
+            turns = state.turns,
+            onDismiss = { showRewind = false },
+            onConfirm = { historyId ->
+                showRewind = false
+                scope.launch {
+                    runCatching {
+                        app.container.api.rewindHistory(chatId, channel, historyId)
+                    }.onSuccess { response ->
+                        if (response.draft.isNotBlank()) input = response.draft
+                        vm.reload()
+                        snackbar.showSnackbar("已回退，原消息已放回输入框")
+                    }.onFailure {
+                        snackbar.showSnackbar(it.message ?: "回退失败")
                     }
                 }
             },

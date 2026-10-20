@@ -69,8 +69,10 @@ fun SessionsScreen(
     var showCreate by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<UserChat?>(null) }
     var deleteTarget by remember { mutableStateOf<UserChat?>(null) }
+    var forkTarget by remember { mutableStateOf<UserChat?>(null) }
     var createLabel by remember { mutableStateOf("") }
     var renameLabel by remember { mutableStateOf("") }
+    var forkLabel by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) { vm.start() }
     DisposableEffect(Unit) {
@@ -201,6 +203,10 @@ fun SessionsScreen(
                                     renameTarget = chat
                                     renameLabel = chat.label
                                 },
+                                onFork = {
+                                    forkTarget = chat
+                                    forkLabel = "${chat.label.ifBlank { chat.chatId }} fork"
+                                },
                                 onDelete = { deleteTarget = chat },
                             )
                             chat.children.forEach { child ->
@@ -211,6 +217,10 @@ fun SessionsScreen(
                                     onRename = {
                                         renameTarget = child
                                         renameLabel = child.label
+                                    },
+                                    onFork = {
+                                        forkTarget = child
+                                        forkLabel = "${child.label.ifBlank { child.chatId }} fork"
                                     },
                                     onDelete = { deleteTarget = child },
                                 )
@@ -285,6 +295,52 @@ fun SessionsScreen(
         )
     }
 
+    forkTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { forkTarget = null },
+            title = { Text("Fork 会话") },
+            text = {
+                Column {
+                    Text(
+                        "将复制该会话的上下文到一个新会话。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = forkLabel,
+                        onValueChange = { forkLabel = it },
+                        label = { Text("新会话名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val label = forkLabel.trim()
+                        forkTarget = null
+                        if (label.isNotBlank()) {
+                            vm.forkChat(target, label) { newId ->
+                                onOpenChat(
+                                    UserChat(
+                                        chatId = newId,
+                                        channel = target.channel.ifBlank { "web" },
+                                        label = label,
+                                    ),
+                                )
+                            }
+                        }
+                    },
+                ) { Text("创建") }
+            },
+            dismissButton = {
+                TextButton(onClick = { forkTarget = null }) { Text("取消") }
+            },
+        )
+    }
+
     deleteTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
@@ -311,6 +367,7 @@ private fun SessionRow(
     child: Boolean = false,
     onClick: () -> Unit,
     onRename: () -> Unit,
+    onFork: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -387,6 +444,13 @@ private fun SessionRow(
                         onClick = {
                             menu = false
                             onRename()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Fork 会话") },
+                        onClick = {
+                            menu = false
+                            onFork()
                         },
                     )
                     DropdownMenuItem(

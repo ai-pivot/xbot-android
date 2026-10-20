@@ -352,6 +352,36 @@ class XbotApi(private val prefs: AppPrefs) {
         rpc("set_llm_concurrency", buildJsonObject { put("personal", value) })
     }
 
+    // ------------------------------------------------------------------
+    // Session actions: fork / rewind
+    // ------------------------------------------------------------------
+
+    suspend fun forkChat(
+        sourceChatId: String,
+        sourceChannel: String = "web",
+        label: String,
+    ): ForkResponse {
+        val body = buildJsonObject {
+            put("source_chat_id", sourceChatId)
+            put("source_channel", sourceChannel)
+            put("label", label)
+        }.toString()
+        return decodeEnvelope(execute(post("/api/chats/fork", body)))
+    }
+
+    suspend fun rewindHistory(
+        chatId: String,
+        channel: String = "web",
+        historyId: Long,
+    ): RewindResponse {
+        val body = buildJsonObject {
+            put("chat_id", chatId)
+            put("channel", channel)
+            put("history_id", historyId)
+        }.toString()
+        return decodeEnvelope(execute(post("/api/history/rewind", body)))
+    }
+
     private suspend inline fun <reified T> decodeRpc(
         method: String,
         params: JsonObject = JsonObject(emptyMap()),

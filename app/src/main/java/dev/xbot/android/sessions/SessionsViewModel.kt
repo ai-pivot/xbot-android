@@ -135,6 +135,28 @@ class SessionsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun forkChat(chat: UserChat, label: String, onCreated: (String) -> Unit) {
+        viewModelScope.launch {
+            _state.update { it.copy(refreshing = true, error = null) }
+            runCatching {
+                withAuthRetry {
+                    api.forkChat(
+                        sourceChatId = chat.chatId,
+                        sourceChannel = chat.channel.ifBlank { "web" },
+                        label = label,
+                    )
+                }
+            }.onSuccess { response ->
+                refresh()
+                onCreated(response.chatId)
+            }.onFailure { e ->
+                _state.update {
+                    it.copy(refreshing = false, error = e.message ?: "Fork 失败")
+                }
+            }
+        }
+    }
+
     fun clearError() {
         _state.update { it.copy(error = null) }
     }
