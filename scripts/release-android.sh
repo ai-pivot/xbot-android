@@ -24,7 +24,12 @@ VERSION_CODE="$(awk -F= '/^versionCode=/{print $2}' version.properties)"
 VERSION_NAME="$(awk -F= '/^versionName=/{print $2}' version.properties)"
 SIZE="$(stat -c%s "$APK")"
 SHA="$(sha256sum "$APK" | awk '{print $1}')"
-BASE="${XBOT_UPDATE_BASE:-http://192.168.0.103:9000/uploads/share/android}"
+BASE="${XBOT_UPDATE_BASE:-}"
+if [ -z "$BASE" ]; then
+  echo "XBOT_UPDATE_BASE is required, e.g. https://your-host/xbot/android" >&2
+  exit 1
+fi
+TARGET="${XBOT_MC_TARGET:-xbotlan/uploads/share/android}"
 OBJECT="xbot-android-${VERSION_CODE}.apk"
 CHANGELOG="${CHANGELOG:-}"
 
@@ -59,10 +64,10 @@ with open(path, "w", encoding="utf-8") as fh:
 PY
 
 mc cp --attr "Content-Type=application/vnd.android.package-archive" \
-  "$APK" "xbotlan/uploads/share/android/$OBJECT"
+  "$APK" "$TARGET/$OBJECT"
 mc cp --attr "Content-Type=application/json" \
-  "$TMPDIR/latest.json" "xbotlan/uploads/share/android/latest.json"
-mc anonymous set download xbotlan/uploads/share/android
+  "$TMPDIR/latest.json" "$TARGET/latest.json"
+mc anonymous set download "$TARGET"
 
 echo "published $VERSION_NAME ($VERSION_CODE) sha256=$SHA"
 echo "manifest: $BASE/latest.json"

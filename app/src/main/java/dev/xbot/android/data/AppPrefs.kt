@@ -99,9 +99,7 @@ class AppPrefs(context: Context) {
         set(value) = prefs.edit().putBoolean(KEY_NOTIF, value).apply()
 
     var updateManifestUrl: String
-        get() = prefs.getString(KEY_UPDATE_URL, DEFAULT_UPDATE_MANIFEST_URL)
-            .orEmpty()
-            .ifBlank { DEFAULT_UPDATE_MANIFEST_URL }
+        get() = prefs.getString(KEY_UPDATE_URL, "").orEmpty()
         set(value) = prefs.edit().putString(KEY_UPDATE_URL, value.trim()).apply()
 
     var lastUpdateCheckAt: Long
@@ -136,6 +134,3 @@ class AppPrefs(context: Context) {
         const val KEY_UPDATE_CHECK_AT = "update_last_check_at"
     }
 }
-
-const val DEFAULT_UPDATE_MANIFEST_URL =
-    "http://192.168.0.103:9000/uploads/share/android/latest.json"

@@ -68,6 +68,7 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
     private var downloadJob: Job? = null
 
     fun autoCheck() {
+        if (prefs.updateManifestUrl.isBlank()) return
         val now = System.currentTimeMillis()
         if (now - prefs.lastUpdateCheckAt < AUTO_CHECK_INTERVAL_MS) return
         prefs.lastUpdateCheckAt = now
@@ -82,6 +83,11 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
     fun check(manual: Boolean) {
         val current = _state.value
         if (current.checking || current.downloading) return
+        val manifestUrl = prefs.updateManifestUrl
+        if (manifestUrl.isBlank()) {
+            _state.update { it.copy(error = "请先在设置中填写更新清单地址") }
+            return
+        }
         viewModelScope.launch {
             _state.update {
                 it.copy(checking = true, error = null, upToDate = false, available = false)
@@ -89,7 +95,7 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val manifest = withContext(Dispatchers.IO) {
                     val request = Request.Builder()
-                        .url(prefs.updateManifestUrl)
+                        .url(manifestUrl)
                         .header("Cache-Control", "no-cache")
                         .get()
                         .build()

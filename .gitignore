@@ -10,8 +10,20 @@ captures/
 tools/
 *.apk
 *.aab
+*.hprof
+.kotlin/
 
 dist/
+
+# secrets / local-only config
+.env
+.env.*
+secrets.properties
+*.keystore
+*.p12
+*.pem
+*.key
+*.log
 
 # release signing (local only)
 keystore.properties

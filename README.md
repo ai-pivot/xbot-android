@@ -108,6 +108,32 @@ The core of the client is `chat/ChatReducer.kt` — intentionally a pure functio
 one turn per `turn_id`, iterations merged by number, stream checkpoints replace and
 deltas append, and turn-ending signals never discard rendered content.
 
+## Repository hygiene
+
+Do **not** commit local secrets or machine-specific paths:
+
+- `keystore.properties` and `keystore/` (release signing key + passwords)
+- `local.properties` (Android SDK path)
+- `dist/` (release APKs + `latest.json`)
+- `tools/` (local JDK / Android SDK / Gradle downloads)
+
+Create your signing config from the template:
+
+```bash
+cp keystore.properties.example keystore.properties
+# then fill in storePassword / keyPassword
+```
+
+The in-app update manifest URL is configured in **Settings → 更新**; no host is
+hard-coded in the source. Publishing a release requires the environment variables:
+
+```bash
+XBOT_UPDATE_BASE=https://your-host/xbot/android \
+XBOT_MC_TARGET=your-mc-alias/bucket/path \
+CHANGELOG="..." \
+./scripts/release-android.sh
+```
+
 ## License
 
-Same as the xbot project.
+MIT — see [LICENSE](LICENSE).
