@@ -86,9 +86,6 @@ fun Composer(
                 OutlinedTextField(
                     value = text,
                     onValueChange = onTextChange,
-                    placeholder = {
-                        Text(if (busy) "会话运行中，发送将排队…" else "发消息给 xbot…")
-                    },
                     minLines = 1,
                     maxLines = 6,
                     shape = RoundedCornerShape(20.dp),
