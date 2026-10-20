@@ -98,6 +98,16 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_NOTIF, false)
         set(value) = prefs.edit().putBoolean(KEY_NOTIF, value).apply()
 
+    var updateManifestUrl: String
+        get() = prefs.getString(KEY_UPDATE_URL, DEFAULT_UPDATE_MANIFEST_URL)
+            .orEmpty()
+            .ifBlank { DEFAULT_UPDATE_MANIFEST_URL }
+        set(value) = prefs.edit().putString(KEY_UPDATE_URL, value.trim()).apply()
+
+    var lastUpdateCheckAt: Long
+        get() = prefs.getLong(KEY_UPDATE_CHECK_AT, 0L)
+        set(value) = prefs.edit().putLong(KEY_UPDATE_CHECK_AT, value).apply()
+
     fun lastSeq(chatId: String): Long =
         if (chatId.isBlank()) 0L else prefs.getLong("$KEY_SEQ_PREFIX$chatId", 0L)
 
@@ -122,5 +132,10 @@ class AppPrefs(context: Context) {
         const val KEY_NOTIF = "notifications_enabled"
         const val KEY_SEQ_PREFIX = "last_seq_"
         const val KEY_COOKIES = "cookies"
+        const val KEY_UPDATE_URL = "update_manifest_url"
+        const val KEY_UPDATE_CHECK_AT = "update_last_check_at"
     }
 }
+
+const val DEFAULT_UPDATE_MANIFEST_URL =
+    "http://192.168.0.103:9000/uploads/share/android/latest.json"

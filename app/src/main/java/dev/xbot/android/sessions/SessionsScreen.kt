@@ -32,6 +32,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -55,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.xbot.android.data.UserChat
+import dev.xbot.android.update.UpdateViewModel
 import java.time.Instant
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -66,6 +68,8 @@ fun SessionsScreen(
     vm: SessionsViewModel = viewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val updateVm: UpdateViewModel = viewModel()
+    val updateState by updateVm.state.collectAsStateWithLifecycle()
     var showCreate by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<UserChat?>(null) }
     var deleteTarget by remember { mutableStateOf<UserChat?>(null) }
@@ -74,7 +78,10 @@ fun SessionsScreen(
     var renameLabel by remember { mutableStateOf("") }
     var forkLabel by remember { mutableStateOf("") }
 
-    LaunchedEffect(Unit) { vm.start() }
+    LaunchedEffect(Unit) {
+        vm.start()
+        updateVm.autoCheck()
+    }
     DisposableEffect(Unit) {
         onDispose { vm.stop() }
     }
@@ -117,6 +124,65 @@ fun SessionsScreen(
         ) {
             if (state.refreshing) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+
+            if (updateState.available || updateState.downloading || updateState.readyPath != null) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    ),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            "发现新版本 ${updateState.manifest?.versionName.orEmpty()}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        if (updateState.downloading) {
+                            LinearProgressIndicator(
+                                progress = { updateState.progress },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                "下载中 ${(updateState.progress * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        if (updateState.verifying) {
+                            Text(
+                                "正在校验安装包…",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        updateState.error?.let { error ->
+                            Text(
+                                error,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        when {
+                            updateState.readyPath != null -> TextButton(
+                                onClick = updateVm::install,
+                            ) { Text("安装更新") }
+
+                            !updateState.downloading && !updateState.checking -> TextButton(
+                                onClick = updateVm::download,
+                            ) { Text("下载并安装") }
+                        }
+                        if (updateState.needInstallPermission) {
+                            TextButton(onClick = updateVm::openInstallPermissionSettings) {
+                                Text("去授权安装未知应用")
+                            }
+                        }
+                    }
+                }
             }
 
             if (!state.authenticated) {

@@ -61,6 +61,7 @@ import dev.xbot.android.chat.ChatViewModel
 import dev.xbot.android.service.startNotificationService
 import dev.xbot.android.service.stopNotificationService
 import dev.xbot.android.ui.components.ModelPickerSheet
+import dev.xbot.android.update.UpdateViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -77,6 +78,9 @@ fun SettingsScreen(
     val chatViewModel: ChatViewModel = viewModel()
     val settingsVm: SettingsViewModel = viewModel()
     val settings by settingsVm.state.collectAsStateWithLifecycle()
+    val updateVm: UpdateViewModel = viewModel()
+    val updateState by updateVm.state.collectAsStateWithLifecycle()
+    var updateUrl by remember { mutableStateOf(prefs.updateManifestUrl) }
     var showDefaultModelPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { settingsVm.load() }
@@ -319,6 +323,103 @@ fun SettingsScreen(
                         }
                     },
                 ) { Text("应用权限设置") }
+            }
+
+            SettingsCard(title = "更新") {
+                InfoRow(
+                    "当前版本",
+                    "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                )
+                OutlinedTextField(
+                    value = updateUrl,
+                    onValueChange = { updateUrl = it },
+                    label = { Text("更新清单地址") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        onClick = {
+                            updateVm.setManifestUrl(updateUrl)
+                            updateVm.check(manual = true)
+                        },
+                        enabled = !updateState.checking && !updateState.downloading,
+                    ) {
+                        Text(if (updateState.checking) "检查中…" else "检查更新")
+                    }
+                    if (updateState.checking) {
+                        LinearProgressIndicator(modifier = Modifier.weight(1f))
+                    }
+                }
+                updateState.error?.let { error ->
+                    Text(
+                        error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                val manifest = updateState.manifest
+                if (manifest != null) {
+                    if (updateState.available) {
+                        Text(
+                            "发现新版本 ${manifest.versionName} (${manifest.versionCode})",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        if (manifest.changelog.isNotBlank()) {
+                            Text(
+                                manifest.changelog,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (updateState.downloading) {
+                            LinearProgressIndicator(
+                                progress = { updateState.progress },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                "下载中 ${(updateState.progress * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                        if (updateState.verifying) {
+                            Text(
+                                "正在校验安装包…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        when {
+                            updateState.readyPath != null -> TextButton(
+                                onClick = updateVm::install,
+                            ) { Text("安装更新") }
+
+                            !updateState.downloading && !updateState.verifying -> TextButton(
+                                onClick = updateVm::download,
+                            ) { Text("下载更新") }
+                        }
+                    } else if (updateState.upToDate) {
+                        Text(
+                            "已是最新版本",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (updateState.needInstallPermission) {
+                    Text(
+                        "需要允许安装未知应用才能完成更新。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    TextButton(onClick = updateVm::openInstallPermissionSettings) {
+                        Text("去授权")
+                    }
+                }
             }
 
             SettingsCard(title = "关于") {

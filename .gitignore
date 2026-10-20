@@ -12,3 +12,8 @@ tools/
 *.aab
 
 dist/
+
+# release signing (local only)
+keystore.properties
+keystore/
+*.jks
