@@ -48,9 +48,9 @@ fun ToolCard(
     var expanded by remember(tool.key) { mutableStateOf(false) }
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
         ),
     ) {
         Column {
@@ -58,12 +58,12 @@ fun ToolCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { expanded = !expanded }
-                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 androidx.compose.foundation.layout.Box(
                     modifier = Modifier
-                        .size(24.dp)
+                        .size(20.dp)
                         .clip(CircleShape)
                         .background(statusColor(tool).copy(alpha = 0.16f)),
                     contentAlignment = Alignment.Center,
@@ -72,46 +72,33 @@ fun ToolCard(
                         Icons.Outlined.Build,
                         contentDescription = null,
                         tint = statusColor(tool),
-                        modifier = Modifier.size(15.dp),
+                        modifier = Modifier.size(13.dp),
                     )
                 }
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        tool.title,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    val subtitle = when {
-                        tool.summary.isNotBlank() -> tool.summary
-                        tool.args.isNotBlank() -> tool.args
-                        else -> ""
-                    }
-                    if (subtitle.isNotBlank()) {
-                        Text(
-                            subtitle.replace('\n', ' '),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    tool.title,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
                 if (tool.elapsedMs > 0) {
                     Text(
                         formatElapsed(tool.elapsedMs),
                         style = MaterialTheme.typography.labelSmall,
+                        fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(2.dp))
                 Icon(
                     if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     contentDescription = if (expanded) "收起" else "展开",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(16.dp),
                 )
             }
 
@@ -119,10 +106,10 @@ fun ToolCard(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 380.dp)
+                        .heightIn(max = 260.dp)
                         .verticalScroll(rememberScrollState())
-                        .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                        .padding(start = 10.dp, end = 10.dp, bottom = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     if (tool.args.isNotBlank()) {
                         SectionLabel("参数")

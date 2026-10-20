@@ -28,6 +28,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -38,6 +40,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -187,6 +190,12 @@ fun ChatScreen(
     val stickToBottom by remember {
         derivedStateOf { !listState.canScrollForward }
     }
+    val canScrollBackward by remember {
+        derivedStateOf { listState.canScrollBackward }
+    }
+    val canScrollForward by remember {
+        derivedStateOf { listState.canScrollForward }
+    }
     val lastContentLength = lastIteration?.content?.length ?: 0
     LaunchedEffect(totalRows, lastContentLength, state.pendingUserText) {
         if (totalRows > 0 && stickToBottom) {
@@ -304,7 +313,12 @@ fun ChatScreen(
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                        contentPadding = PaddingValues(
+                            start = 12.dp,
+                            top = 10.dp,
+                            end = 12.dp,
+                            bottom = 64.dp,
+                        ),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         if (state.hasMore) {
@@ -328,6 +342,50 @@ fun ChatScreen(
                                 ThinkingRow()
                             }
                         }
+                    }
+                }
+            }
+
+            // Floating scroll controls: jump to the oldest message instantly,
+            // or return to the newest one. Only visible when the list can move
+            // in that direction, so they never cover idle content.
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 10.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalAlignment = Alignment.End,
+            ) {
+                if (canScrollBackward) {
+                    SmallFloatingActionButton(
+                        onClick = {
+                            scope.launch { listState.scrollToItem(0) }
+                        },
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.primary,
+                    ) {
+                        Icon(
+                            Icons.Filled.KeyboardArrowUp,
+                            contentDescription = "跳到顶部",
+                        )
+                    }
+                }
+                if (canScrollForward) {
+                    SmallFloatingActionButton(
+                        onClick = {
+                            scope.launch {
+                                listState.animateScrollToItem(
+                                    (totalRows - 1).coerceAtLeast(0),
+                                )
+                            }
+                        },
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.primary,
+                    ) {
+                        Icon(
+                            Icons.Filled.KeyboardArrowDown,
+                            contentDescription = "回到底部",
+                        )
                     }
                 }
             }
