@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -66,6 +67,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -73,11 +75,14 @@ import dev.xbot.android.XbotApp
 import dev.xbot.android.chat.ChatViewModel
 import dev.xbot.android.chat.IterationUi
 import dev.xbot.android.chat.TurnUi
+import dev.xbot.android.data.ModelEntry
+import dev.xbot.android.data.SessionModel
 import dev.xbot.android.ui.components.AskUserDialog
 import dev.xbot.android.ui.components.AutoLinkText
 import dev.xbot.android.ui.components.Composer
 import dev.xbot.android.ui.components.CopyOrSelectText
 import dev.xbot.android.ui.components.MarkdownText
+import dev.xbot.android.ui.components.ModelPickerSheet
 import dev.xbot.android.ui.components.ToolCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -116,10 +121,39 @@ fun ChatScreen(
     var attachment by remember(chatId) { mutableStateOf<PendingAttachment?>(null) }
     var sending by remember(chatId) { mutableStateOf(false) }
 
+    var sessionModel by remember(chatId) { mutableStateOf<SessionModel?>(null) }
+    var availableModels by remember(chatId) { mutableStateOf<List<ModelEntry>>(emptyList()) }
+    var modelsLoading by remember(chatId) { mutableStateOf(false) }
+    var showModelPicker by remember(chatId) { mutableStateOf(false) }
+
     LaunchedEffect(chatId, channel) {
         vm.open(chatId, channel, title)
         if (app.container.prefs.notificationsEnabled) {
             runCatching { dev.xbot.android.service.startNotificationService(context) }
+        }
+        modelsLoading = true
+        runCatching {
+            val session = app.container.api.getSessionModel(chatId, channel)
+            val resolved = if (session.model.isBlank()) {
+                val fallback = app.container.api.getDefaultModel()
+                SessionModel(fallback.subId, fallback.model)
+            } else {
+                session
+            }
+            val entries = app.container.api.listModelEntries()
+            sessionModel = resolved
+            availableModels = entries
+        }
+        modelsLoading = false
+    }
+
+    LaunchedEffect(showModelPicker) {
+        if (showModelPicker && availableModels.isEmpty() && !modelsLoading) {
+            modelsLoading = true
+            availableModels = runCatching {
+                app.container.api.listModelEntries()
+            }.getOrDefault(emptyList())
+            modelsLoading = false
         }
     }
 
@@ -285,6 +319,15 @@ fun ChatScreen(
                         }
                     },
                     actions = {
+                        TextButton(onClick = { showModelPicker = true }) {
+                            Text(
+                                sessionModel?.model?.take(18).orEmpty().ifBlank { "模型" },
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 120.dp),
+                            )
+                        }
                         IconButton(onClick = vm::reload) {
                             Icon(Icons.Filled.Refresh, contentDescription = "重新加载")
                         }
@@ -429,6 +472,29 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    if (showModelPicker) {
+        ModelPickerSheet(
+            title = "选择模型",
+            models = availableModels,
+            currentSubId = sessionModel?.subscriptionId.orEmpty(),
+            currentModel = sessionModel?.model.orEmpty(),
+            loading = modelsLoading,
+            onDismiss = { showModelPicker = false },
+            onSelect = { entry ->
+                showModelPicker = false
+                scope.launch {
+                    runCatching {
+                        app.container.api.selectModel(chatId, channel, entry.subId, entry.model)
+                    }.onSuccess {
+                        sessionModel = SessionModel(entry.subId, entry.model)
+                    }.onFailure {
+                        snackbar.showSnackbar(it.message ?: "切换模型失败")
+                    }
+                }
+            },
+        )
     }
 
     state.askUser?.let { prompt ->

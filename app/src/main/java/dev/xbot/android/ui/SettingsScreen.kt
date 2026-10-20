@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -24,16 +25,20 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,14 +48,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.xbot.android.BuildConfig
 import dev.xbot.android.XbotApp
 import dev.xbot.android.chat.ChatViewModel
 import dev.xbot.android.service.startNotificationService
 import dev.xbot.android.service.stopNotificationService
+import dev.xbot.android.ui.components.ModelPickerSheet
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -65,6 +75,11 @@ fun SettingsScreen(
     val api = app.container.api
     val scope = rememberCoroutineScope()
     val chatViewModel: ChatViewModel = viewModel()
+    val settingsVm: SettingsViewModel = viewModel()
+    val settings by settingsVm.state.collectAsStateWithLifecycle()
+    var showDefaultModelPicker by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) { settingsVm.load() }
 
     var notifications by remember { mutableStateOf(prefs.notificationsEnabled) }
     var showLogout by remember { mutableStateOf(false) }
@@ -138,11 +153,127 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (settings.loading || settings.saving) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            settings.error?.let { error ->
+                Text(
+                    error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             SettingsCard(title = "服务器") {
                 InfoRow("地址", prefs.serverUrl)
                 InfoRow("账号", prefs.secrets.username().ifBlank { "未登录" })
                 InfoRow("当前会话", prefs.activeChatId.ifBlank { "未选择" })
                 InfoRow("通道", prefs.activeChannel)
+            }
+
+            SettingsCard(title = "模型与推理") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "默认模型",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            settings.defaultModel.ifBlank { "未设置" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    TextButton(onClick = { showDefaultModelPicker = true }) {
+                        Text("选择")
+                    }
+                }
+
+                SettingChoiceRow(
+                    label = "思考模式",
+                    options = listOf(
+                        "auto" to "自动",
+                        "think" to "开启",
+                        "think-max" to "最大",
+                        "disabled" to "关闭",
+                    ),
+                    current = settings.thinkingMode,
+                    onSelect = settingsVm::setThinkingMode,
+                )
+
+                SettingChoiceRow(
+                    label = "上下文模式",
+                    options = listOf(
+                        "phase1" to "自动压缩",
+                        "none" to "不压缩",
+                    ),
+                    current = settings.contextMode,
+                    onSelect = settingsVm::setContextMode,
+                )
+
+                NumberSettingRow(
+                    label = "最大输出 tokens",
+                    value = settings.maxOutputTokens,
+                    onValueChange = settingsVm::updateMaxOutputText,
+                    onApply = settingsVm::applyMaxOutput,
+                )
+                NumberSettingRow(
+                    label = "最大上下文 tokens",
+                    value = settings.maxContextTokens,
+                    onValueChange = settingsVm::updateMaxContextText,
+                    onApply = settingsVm::applyMaxContext,
+                )
+                NumberSettingRow(
+                    label = "压缩阈值（0–1）",
+                    value = settings.compressionThreshold,
+                    onValueChange = settingsVm::updateCompressionText,
+                    onApply = settingsVm::applyCompression,
+                    decimal = true,
+                )
+                NumberSettingRow(
+                    label = "LLM 并发",
+                    value = settings.llmConcurrency,
+                    onValueChange = settingsVm::updateConcurrencyText,
+                    onApply = settingsVm::applyConcurrency,
+                )
+            }
+
+            SettingsCard(title = "工具") {
+                if (settings.tools.isEmpty()) {
+                    Text(
+                        "没有可配置的内置工具。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    settings.tools.forEach { tool ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(tool.name, style = MaterialTheme.typography.bodyMedium)
+                                if (tool.description.isNotBlank()) {
+                                    Text(
+                                        tool.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = tool.enabled,
+                                onCheckedChange = { settingsVm.toggleTool(tool, it) },
+                            )
+                        }
+                    }
+                }
             }
 
             SettingsCard(title = "通知") {
@@ -207,6 +338,21 @@ fun SettingsScreen(
                 Text("退出登录", color = MaterialTheme.colorScheme.error)
             }
         }
+    }
+
+    if (showDefaultModelPicker) {
+        ModelPickerSheet(
+            title = "选择默认模型",
+            models = settings.models,
+            currentSubId = settings.defaultSubId,
+            currentModel = settings.defaultModel,
+            loading = settings.loading,
+            onDismiss = { showDefaultModelPicker = false },
+            onSelect = { entry ->
+                showDefaultModelPicker = false
+                settingsVm.selectDefaultModel(entry)
+            },
+        )
     }
 
     message?.let { text ->
@@ -287,5 +433,58 @@ private fun InfoRow(label: String, value: String) {
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.weight(0.65f),
         )
+    }
+}
+
+@Composable
+private fun SettingChoiceRow(
+    label: String,
+    options: List<Pair<String, String>>,
+    current: String,
+    onSelect: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            options.forEach { (value, title) ->
+                FilterChip(
+                    selected = current == value,
+                    onClick = { onSelect(value) },
+                    label = { Text(title) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NumberSettingRow(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onApply: () -> Unit,
+    decimal: Boolean = false,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number,
+                imeAction = ImeAction.Done,
+            ),
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onApply) { Text("保存") }
     }
 }

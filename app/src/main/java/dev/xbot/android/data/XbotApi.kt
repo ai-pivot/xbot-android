@@ -8,6 +8,8 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -252,6 +254,106 @@ class XbotApi(private val prefs: AppPrefs) {
             XbotJson.decodeFromJsonElement(ProgressEvent.serializer(), result)
         }.getOrNull()
     }
+
+    // ------------------------------------------------------------------
+    // Models & user settings
+    // ------------------------------------------------------------------
+
+    suspend fun listModelEntries(): List<ModelEntry> =
+        decodeRpc("list_all_model_entries")
+
+    suspend fun getSessionModel(chatId: String, channel: String = "web"): SessionModel =
+        decodeRpc(
+            "get_session_subscription",
+            buildJsonObject {
+                put("chat_id", chatId)
+                put("channel", channel)
+            },
+        )
+
+    suspend fun selectModel(chatId: String, channel: String, subId: String, model: String) {
+        rpc(
+            "select_model",
+            buildJsonObject {
+                put("chat_id", chatId)
+                put("channel", channel)
+                put("sub_id", subId)
+                put("model", model)
+            },
+        )
+    }
+
+    suspend fun getDefaultModel(): DefaultModel = decodeRpc("get_default_model")
+
+    suspend fun setDefaultModel(subId: String, model: String) {
+        rpc(
+            "set_default_model",
+            buildJsonObject {
+                put("sub_id", subId)
+                put("model", model)
+            },
+        )
+    }
+
+    suspend fun getThinkingMode(): String = decodeRpc("get_user_thinking_mode")
+
+    suspend fun setThinkingMode(mode: String) {
+        rpc("set_user_thinking_mode", buildJsonObject { put("mode", mode) })
+    }
+
+    suspend fun getContextMode(): String = decodeRpc("get_context_mode")
+
+    suspend fun setContextMode(mode: String) {
+        rpc("set_context_mode", buildJsonObject { put("mode", mode) })
+    }
+
+    suspend fun getMaxOutputTokens(): Int = decodeRpc("get_user_max_output_tokens")
+
+    suspend fun setMaxOutputTokens(value: Int) {
+        rpc("set_user_max_output_tokens", buildJsonObject { put("max_tokens", value) })
+    }
+
+    suspend fun getMaxContextTokens(): Int = decodeRpc("get_user_max_context")
+
+    suspend fun setMaxContextTokens(value: Int) {
+        rpc("set_user_max_context", buildJsonObject { put("max_context", value) })
+    }
+
+    suspend fun getCompressionThreshold(): String {
+        val obj = rpc(
+            "get_settings",
+            buildJsonObject { put("namespace", "agent") },
+        ).jsonObject
+        return obj["compression_threshold"]?.jsonPrimitive?.content.orEmpty()
+    }
+
+    suspend fun setCompressionThreshold(value: Double) {
+        rpc("set_compression_threshold", buildJsonObject { put("threshold", value) })
+    }
+
+    suspend fun getToolSettings(): List<ToolSetting> =
+        decodeRpc<ToolSettingsResponse>("get_tools_settings").tools
+
+    suspend fun setToolEnabled(name: String, enabled: Boolean) {
+        rpc(
+            "set_tool_enabled",
+            buildJsonObject {
+                put("name", name)
+                put("enabled", enabled)
+            },
+        )
+    }
+
+    suspend fun getLLMConcurrency(): Int = decodeRpc("get_llm_concurrency")
+
+    suspend fun setLLMConcurrency(value: Int) {
+        rpc("set_llm_concurrency", buildJsonObject { put("personal", value) })
+    }
+
+    private suspend inline fun <reified T> decodeRpc(
+        method: String,
+        params: JsonObject = JsonObject(emptyMap()),
+    ): T = XbotJson.decodeFromJsonElement(rpc(method, params))
 
     // ------------------------------------------------------------------
     // Plumbing
