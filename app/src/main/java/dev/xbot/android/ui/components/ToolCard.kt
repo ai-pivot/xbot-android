@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
@@ -127,40 +126,42 @@ fun ToolCard(
                 ) {
                     if (tool.args.isNotBlank()) {
                         SectionLabel("参数")
-                        SelectionContainer {
-                            Text(
-                                tool.args,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                                lineHeight = 17.sp,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(
-                                        MaterialTheme.colorScheme.surface,
-                                        RoundedCornerShape(8.dp),
-                                    )
-                                    .padding(8.dp),
-                            )
-                        }
+                        Text(
+                            tool.args,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .copyOnLongPress(tool.args)
+                                .background(
+                                    MaterialTheme.colorScheme.surface,
+                                    RoundedCornerShape(8.dp),
+                                )
+                                .padding(8.dp),
+                        )
                     }
                     if (tool.summary.isNotBlank() && tool.detail.isNotBlank()) {
                         SectionLabel("摘要")
-                        Text(tool.summary, style = MaterialTheme.typography.bodySmall)
+                        AutoLinkText(
+                            text = tool.summary,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.copyOnLongPress(tool.summary),
+                        )
                     }
                     if (tool.detail.isNotBlank()) {
                         SectionLabel("输出")
-                        SelectionContainer {
-                            MarkdownText(
-                                text = tool.detail,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(
-                                        MaterialTheme.colorScheme.surface,
-                                        RoundedCornerShape(8.dp),
-                                    )
-                                    .padding(8.dp),
-                            )
-                        }
+                        MarkdownText(
+                            text = tool.detail,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .copyOnLongPress(tool.detail)
+                                .background(
+                                    MaterialTheme.colorScheme.surface,
+                                    RoundedCornerShape(8.dp),
+                                )
+                                .padding(8.dp),
+                        )
                     }
                     if (tool.args.isBlank() && tool.detail.isBlank()) {
                         Text(

@@ -68,9 +68,11 @@ import dev.xbot.android.chat.ChatViewModel
 import dev.xbot.android.chat.IterationUi
 import dev.xbot.android.chat.TurnUi
 import dev.xbot.android.ui.components.AskUserDialog
+import dev.xbot.android.ui.components.AutoLinkText
 import dev.xbot.android.ui.components.Composer
 import dev.xbot.android.ui.components.MarkdownText
 import dev.xbot.android.ui.components.ToolCard
+import dev.xbot.android.ui.components.copyOnLongPress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -358,6 +360,7 @@ private fun TurnBlock(turn: TurnUi) {
                 text = turn.finalText,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .copyOnLongPress(turn.finalText)
                     .padding(horizontal = 4.dp),
             )
         }
@@ -390,6 +393,7 @@ private fun IterationBlock(iteration: IterationUi) {
                 text = iteration.content,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .copyOnLongPress(iteration.content)
                     .padding(horizontal = 4.dp),
             )
         }
@@ -430,6 +434,7 @@ private fun ReasoningBlock(reasoning: String) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontFamily = FontFamily.SansSerif,
+                    modifier = Modifier.copyOnLongPress(reasoning),
                 )
             }
         }
@@ -448,10 +453,13 @@ private fun UserBubble(text: String) {
             shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
             modifier = Modifier.fillMaxWidth(0.86f),
         ) {
-            Text(
-                text,
+            AutoLinkText(
+                text = text,
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                linkColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier
+                    .copyOnLongPress(text)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
             )
         }
     }

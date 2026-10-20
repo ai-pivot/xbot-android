@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -17,11 +18,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -158,12 +164,14 @@ private fun inline(raw: String): AnnotatedString {
     return buildAnnotatedString {
         var cursor = 0
         INLINE_REGEX.findAll(raw).forEach { match ->
-            if (match.range.first > cursor) append(raw.substring(cursor, match.range.first))
+            if (match.range.first > cursor) {
+                appendAutoLinks(raw.substring(cursor, match.range.first), linkColor)
+            }
             val token = match.value
             when {
                 token.startsWith("**") && token.endsWith("**") -> {
                     withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                        append(token.substring(2, token.length - 2))
+                        appendAutoLinks(token.substring(2, token.length - 2), linkColor)
                     }
                 }
 
@@ -181,14 +189,22 @@ private fun inline(raw: String): AnnotatedString {
 
                 token.startsWith("[") -> {
                     val close = token.indexOf("](")
-                    if (close > 0) {
-                        withStyle(
-                            SpanStyle(
-                                color = linkColor,
-                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                    val end = token.lastIndexOf(')')
+                    if (close > 0 && end > close + 2) {
+                        val label = token.substring(1, close)
+                        val url = token.substring(close + 2, end)
+                        withLink(
+                            LinkAnnotation.Url(
+                                url = url,
+                                styles = TextLinkStyles(
+                                    style = SpanStyle(
+                                        color = linkColor,
+                                        textDecoration = TextDecoration.Underline,
+                                    ),
+                                ),
                             ),
                         ) {
-                            append(token.substring(1, close))
+                            append(label)
                         }
                     } else {
                         append(token)
@@ -197,16 +213,75 @@ private fun inline(raw: String): AnnotatedString {
 
                 token.startsWith("*") && token.endsWith("*") -> {
                     withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                        append(token.substring(1, token.length - 1))
+                        appendAutoLinks(token.substring(1, token.length - 1), linkColor)
                     }
                 }
 
-                else -> append(token)
+                else -> appendAutoLinks(token, linkColor)
             }
             cursor = match.range.last + 1
         }
-        if (cursor < raw.length) append(raw.substring(cursor))
+        if (cursor < raw.length) appendAutoLinks(raw.substring(cursor), linkColor)
     }
+}
+
+/** Plain-text chat bubbles: auto-detect http(s):// and www. links. */
+@Composable
+fun AutoLinkText(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    linkColor: Color? = null,
+) {
+    val resolvedLinkColor = linkColor ?: MaterialTheme.colorScheme.primary
+    val annotated = remember(text, resolvedLinkColor) {
+        buildAnnotatedString { appendAutoLinks(text, resolvedLinkColor) }
+    }
+    Text(text = annotated, modifier = modifier, style = style)
+}
+
+private val URL_REGEX = Regex("""(?i)\b(https?://|www\.)[^\s<>"']+""")
+
+private fun AnnotatedString.Builder.appendAutoLinks(text: String, linkColor: Color) {
+    var cursor = 0
+    URL_REGEX.findAll(text).forEach { match ->
+        if (match.range.first > cursor) append(text.substring(cursor, match.range.first))
+        var display = match.value
+        var suffix = ""
+        while (display.isNotEmpty() && display.last() in ".,;:!?，。；：！？、") {
+            suffix = display.last() + suffix
+            display = display.dropLast(1)
+        }
+        while (display.endsWith(")") &&
+            display.count { it == ')' } > display.count { it == '(' }
+        ) {
+            suffix = ")" + suffix
+            display = display.dropLast(1)
+        }
+        if (display.isNotEmpty()) {
+            val url = if (display.startsWith("www.", ignoreCase = true)) {
+                "https://$display"
+            } else {
+                display
+            }
+            withLink(
+                LinkAnnotation.Url(
+                    url = url,
+                    styles = TextLinkStyles(
+                        style = SpanStyle(
+                            color = linkColor,
+                            textDecoration = TextDecoration.Underline,
+                        ),
+                    ),
+                ),
+            ) {
+                append(display)
+            }
+        }
+        append(suffix)
+        cursor = match.range.last + 1
+    }
+    if (cursor < text.length) append(text.substring(cursor))
 }
 
 private sealed interface MdBlock {
