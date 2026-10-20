@@ -73,11 +73,18 @@ fun XbotNavHost() {
         composable("settings") {
             SettingsScreen(
                 onBack = { nav.popBackStack() },
+                onOpenTools = { nav.navigate("tools") },
                 onLogout = {
                     nav.navigate("login") {
                         popUpTo("sessions") { inclusive = true }
                     }
                 },
+            )
+        }
+
+        composable("tools") {
+            ToolsScreen(
+                onBack = { nav.popBackStack() },
             )
         }
     }

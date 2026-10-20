@@ -233,6 +233,9 @@ fun ChatScreen(
         (if (showThinking) 1 else 0)
     // The optional "load more" row is also a LazyColumn item.
     val itemCount = state.turns.size + extraRows + if (state.hasMore) 1 else 0
+    val currentModelEntry = availableModels.firstOrNull {
+        it.subId == sessionModel?.subscriptionId && it.model == sessionModel?.model
+    }
 
     val canScrollBackward by remember {
         derivedStateOf { listState.canScrollBackward }
@@ -324,11 +327,12 @@ fun ChatScreen(
                     actions = {
                         TextButton(onClick = { showModelPicker = true }) {
                             Text(
-                                sessionModel?.model?.take(18).orEmpty().ifBlank { "模型" },
+                                currentModelEntry?.title
+                                    ?: sessionModel?.model?.take(18).orEmpty().ifBlank { "模型" },
                                 style = MaterialTheme.typography.labelMedium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 120.dp),
+                                modifier = Modifier.widthIn(max = 150.dp),
                             )
                         }
                         IconButton(

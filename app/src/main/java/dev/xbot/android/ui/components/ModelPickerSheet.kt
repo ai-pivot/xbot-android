@@ -91,12 +91,16 @@ fun ModelPickerSheet(
                             )
                         },
                         supportingContent = {
-                            if (entry.subtitle.isNotBlank()) {
-                                Text(
-                                    entry.subtitle,
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
+                            val subscription = entry.subName.ifBlank { "默认订阅" }
+                            val detail = if (entry.subtitle.isBlank()) {
+                                subscription
+                            } else {
+                                "$subscription · ${entry.subtitle}"
                             }
+                            Text(
+                                detail,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
                         },
                         trailingContent = {
                             if (selected) {

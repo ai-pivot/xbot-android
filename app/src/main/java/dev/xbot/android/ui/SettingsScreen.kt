@@ -16,11 +16,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -69,6 +72,7 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     onBack: () -> Unit,
     onLogout: () -> Unit,
+    onOpenTools: () -> Unit,
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as XbotApp
@@ -174,7 +178,14 @@ fun SettingsScreen(
                 InfoRow("通道", prefs.activeChannel)
             }
 
-            SettingsCard(title = "模型与推理") {
+            SettingsCard(
+                title = "模型与推理",
+                collapsible = true,
+                initiallyExpanded = false,
+            ) {
+                val defaultEntry = settings.models.firstOrNull {
+                    it.subId == settings.defaultSubId && it.model == settings.defaultModel
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -186,7 +197,8 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            settings.defaultModel.ifBlank { "未设置" },
+                            defaultEntry?.title
+                                ?: settings.defaultModel.ifBlank { "未设置" },
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -247,36 +259,24 @@ fun SettingsScreen(
             }
 
             SettingsCard(title = "工具") {
-                if (settings.tools.isEmpty()) {
-                    Text(
-                        "没有可配置的内置工具。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    settings.tools.forEach { tool ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(tool.name, style = MaterialTheme.typography.bodyMedium)
-                                if (tool.description.isNotBlank()) {
-                                    Text(
-                                        tool.description,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-                            Switch(
-                                checked = tool.enabled,
-                                onCheckedChange = { settingsVm.toggleTool(tool, it) },
-                            )
-                        }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("内置工具", style = MaterialTheme.typography.bodyMedium)
+                        val enabledCount = settings.tools.count { it.enabled }
+                        Text(
+                            if (settings.tools.isEmpty()) {
+                                "暂无可配置工具"
+                            } else {
+                                "$enabledCount / ${settings.tools.size} 已启用"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
+                    TextButton(onClick = onOpenTools) { Text("管理") }
                 }
             }
 
@@ -497,8 +497,11 @@ fun SettingsScreen(
 @Composable
 private fun SettingsCard(
     title: String,
+    collapsible: Boolean = false,
+    initiallyExpanded: Boolean = true,
     content: @Composable () -> Unit,
 ) {
+    var expanded by remember(title) { mutableStateOf(initiallyExpanded) }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -509,13 +512,35 @@ private fun SettingsCard(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
+            val headerModifier = if (collapsible) {
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+            } else {
+                Modifier.fillMaxWidth()
+            }
+            Row(
+                modifier = headerModifier,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (collapsible) {
+                    Icon(
+                        if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = if (expanded) "收起" else "展开",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-            content()
+            if (!collapsible || expanded) {
+                content()
+            }
         }
     }
 }
