@@ -1,13 +1,16 @@
 package dev.xbot.android.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalTextStyle
@@ -26,9 +29,11 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -36,8 +41,8 @@ import androidx.compose.ui.unit.sp
  * Lightweight native Markdown renderer.
  *
  * Supports the constructs xbot replies actually use: headings, paragraphs,
- * bullet/numbered lists, quotes, fenced code, inline bold/italic/code and links.
- * Tables are rendered as monospace blocks (still readable, no layout surprises).
+ * bullet/numbered lists, quotes, fenced code, inline bold/italic/code, links,
+ * and native tables (scroll horizontally when wider than the screen).
  */
 @Composable
 fun MarkdownText(
@@ -145,6 +150,8 @@ fun MarkdownText(
                     }
                 }
 
+                is MdBlock.Table -> MarkdownTable(block)
+
                 MdBlock.Rule -> Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -156,6 +163,137 @@ fun MarkdownText(
         }
     }
 }
+
+@Composable
+fun MarkdownInline(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = LocalTextStyle.current,
+    textAlign: TextAlign? = null,
+) {
+    Text(
+        text = inline(text),
+        modifier = modifier,
+        style = style,
+        textAlign = textAlign,
+    )
+}
+
+@Composable
+private fun MarkdownTable(table: MdBlock.Table) {
+    val columns = maxOf(
+        table.headers.size,
+        table.rows.maxOfOrNull { it.size } ?: 0,
+        1,
+    )
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val minColumn = 88.dp
+        val columnWidth = maxOf(minColumn, maxWidth / columns.toFloat())
+        val tableWidth = columnWidth * columns.toFloat()
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+        ) {
+            Column(modifier = Modifier.width(tableWidth)) {
+                TableRow(
+                    cells = table.headers,
+                    columns = columns,
+                    columnWidth = columnWidth,
+                    alignments = table.alignments,
+                    header = true,
+                )
+                table.rows.forEach { row ->
+                    TableRow(
+                        cells = row,
+                        columns = columns,
+                        columnWidth = columnWidth,
+                        alignments = table.alignments,
+                        header = false,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TableRow(
+    cells: List<String>,
+    columns: Int,
+    columnWidth: Dp,
+    alignments: List<TableAlign>,
+    header: Boolean,
+) {
+    Row(modifier = Modifier.width(columnWidth * columns.toFloat())) {
+        repeat(columns) { index ->
+            val value = cells.getOrNull(index).orEmpty()
+            val alignment = alignments.getOrNull(index) ?: TableAlign.Start
+            Box(
+                modifier = Modifier
+                    .width(columnWidth)
+                    .border(
+                        width = 0.5.dp,
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                    )
+                    .background(
+                        if (header) {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        } else {
+                            Color.Transparent
+                        },
+                    )
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            ) {
+                MarkdownInline(
+                    text = value,
+                    style = if (header) {
+                        MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    } else {
+                        MaterialTheme.typography.bodySmall
+                    },
+                    textAlign = when (alignment) {
+                        TableAlign.Start -> TextAlign.Start
+                        TableAlign.Center -> TextAlign.Center
+                        TableAlign.End -> TextAlign.End
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun isTableStart(lines: List<String>, index: Int): Boolean {
+    if (index + 1 >= lines.size) return false
+    val header = lines[index].trim()
+    val separator = lines[index + 1].trim()
+    if (!header.contains('|') || !separator.contains('|')) return false
+    val cells = splitTableRow(separator)
+    return cells.isNotEmpty() && cells.all { it.matches(Regex(""":?-{3,}:?""")) }
+}
+
+private fun splitTableRow(row: String): List<String> {
+    var value = row.trim()
+    if (value.startsWith("|")) value = value.substring(1)
+    if (value.endsWith("|")) value = value.dropLast(1)
+    if (value.isBlank()) return emptyList()
+    return value.split(Regex("""(?<!\\)\|""")).map {
+        it.trim().replace("\\|", "|")
+    }
+}
+
+private fun parseTableAlignments(separator: String): List<TableAlign> =
+    splitTableRow(separator).map { cell ->
+        val left = cell.startsWith(":")
+        val right = cell.endsWith(":")
+        when {
+            left && right -> TableAlign.Center
+            right -> TableAlign.End
+            else -> TableAlign.Start
+        }
+    }
 
 @Composable
 private fun inline(raw: String): AnnotatedString {
@@ -291,8 +429,15 @@ private sealed interface MdBlock {
     data class Bullets(val items: List<String>) : MdBlock
     data class Numbered(val items: List<String>) : MdBlock
     data class Code(val language: String, val code: String) : MdBlock
+    data class Table(
+        val headers: List<String>,
+        val rows: List<List<String>>,
+        val alignments: List<TableAlign>,
+    ) : MdBlock
     data object Rule : MdBlock
 }
+
+private enum class TableAlign { Start, Center, End }
 
 private val INLINE_REGEX = Regex("""(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\n]+\))""")
 private val HEADING = Regex("""^(#{1,6})\s+(.*)$""")
@@ -388,17 +533,19 @@ private fun parseMarkdown(text: String): List<MdBlock> {
             continue
         }
 
-        // Table rows: keep the alignment readable without a layout engine.
-        if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+        if (isTableStart(lines, index)) {
             flushParagraph()
-            val table = mutableListOf<String>()
+            val headers = splitTableRow(lines[index])
+            val alignments = parseTableAlignments(lines[index + 1])
+            index += 2
+            val rows = mutableListOf<List<String>>()
             while (index < lines.size) {
                 val row = lines[index].trim()
-                if (!row.startsWith("|") || !row.endsWith("|")) break
-                table += row
+                if (row.isEmpty() || !row.contains('|')) break
+                rows += splitTableRow(row)
                 index++
             }
-            blocks += MdBlock.Code("table", table.joinToString("\n"))
+            blocks += MdBlock.Table(headers, rows, alignments)
             continue
         }
 
