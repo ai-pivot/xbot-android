@@ -113,42 +113,45 @@ fun ToolCard(
                 ) {
                     if (tool.args.isNotBlank()) {
                         SectionLabel("参数")
-                        Text(
-                            tool.args,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            lineHeight = 17.sp,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .copyOnLongPress(tool.args)
-                                .background(
-                                    MaterialTheme.colorScheme.surface,
-                                    RoundedCornerShape(8.dp),
-                                )
-                                .padding(8.dp),
-                        )
+                        CopyOrSelectText(text = tool.args) {
+                            Text(
+                                tool.args,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                lineHeight = 17.sp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        MaterialTheme.colorScheme.surface,
+                                        RoundedCornerShape(8.dp),
+                                    )
+                                    .padding(8.dp),
+                            )
+                        }
                     }
                     if (tool.summary.isNotBlank() && tool.detail.isNotBlank()) {
                         SectionLabel("摘要")
-                        AutoLinkText(
-                            text = tool.summary,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.copyOnLongPress(tool.summary),
-                        )
+                        CopyOrSelectText(text = tool.summary) {
+                            AutoLinkText(
+                                text = tool.summary,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                     }
                     if (tool.detail.isNotBlank()) {
                         SectionLabel("输出")
-                        MarkdownText(
-                            text = tool.detail,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .copyOnLongPress(tool.detail)
-                                .background(
-                                    MaterialTheme.colorScheme.surface,
-                                    RoundedCornerShape(8.dp),
-                                )
-                                .padding(8.dp),
-                        )
+                        CopyOrSelectText(text = tool.detail) {
+                            MarkdownText(
+                                text = tool.detail,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        MaterialTheme.colorScheme.surface,
+                                        RoundedCornerShape(8.dp),
+                                    )
+                                    .padding(8.dp),
+                            )
+                        }
                     }
                     if (tool.args.isBlank() && tool.detail.isBlank()) {
                         Text(

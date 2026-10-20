@@ -74,9 +74,9 @@ import dev.xbot.android.chat.TurnUi
 import dev.xbot.android.ui.components.AskUserDialog
 import dev.xbot.android.ui.components.AutoLinkText
 import dev.xbot.android.ui.components.Composer
+import dev.xbot.android.ui.components.CopyOrSelectText
 import dev.xbot.android.ui.components.MarkdownText
 import dev.xbot.android.ui.components.ToolCard
-import dev.xbot.android.ui.components.copyOnLongPress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -424,13 +424,14 @@ private fun TurnBlock(turn: TurnUi) {
         }
         val lastContent = turn.iterations.lastOrNull()?.content.orEmpty()
         if (turn.finalText.isNotBlank() && turn.finalText != lastContent) {
-            MarkdownText(
-                text = turn.finalText,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .copyOnLongPress(turn.finalText)
-                    .padding(horizontal = 4.dp),
-            )
+            CopyOrSelectText(text = turn.finalText) {
+                MarkdownText(
+                    text = turn.finalText,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                )
+            }
         }
         if (turn.cancelled) {
             Text(
@@ -457,13 +458,14 @@ private fun IterationBlock(iteration: IterationUi) {
             }
         }
         if (iteration.content.isNotBlank()) {
-            MarkdownText(
-                text = iteration.content,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .copyOnLongPress(iteration.content)
-                    .padding(horizontal = 4.dp),
-            )
+            CopyOrSelectText(text = iteration.content) {
+                MarkdownText(
+                    text = iteration.content,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                )
+            }
         }
     }
 }
@@ -497,13 +499,14 @@ private fun ReasoningBlock(reasoning: String) {
             }
             if (expanded) {
                 Spacer(Modifier.height(6.dp))
-                Text(
-                    reasoning,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontFamily = FontFamily.SansSerif,
-                    modifier = Modifier.copyOnLongPress(reasoning),
-                )
+                CopyOrSelectText(text = reasoning) {
+                    Text(
+                        reasoning,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.SansSerif,
+                    )
+                }
             }
         }
     }
@@ -521,14 +524,14 @@ private fun UserBubble(text: String) {
             shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
             modifier = Modifier.fillMaxWidth(0.86f),
         ) {
-            AutoLinkText(
-                text = text,
-                style = MaterialTheme.typography.bodyMedium,
-                linkColor = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier
-                    .copyOnLongPress(text)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-            )
+            CopyOrSelectText(text = text) {
+                AutoLinkText(
+                    text = text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    linkColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
         }
     }
 }
