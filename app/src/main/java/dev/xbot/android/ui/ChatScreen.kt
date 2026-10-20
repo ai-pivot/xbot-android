@@ -20,9 +20,10 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -57,6 +58,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -102,7 +104,13 @@ fun ChatScreen(
     val app = context.applicationContext as XbotApp
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    val listState = rememberLazyListState()
+    val listState = remember(chatId) { LazyListState() }
+
+    // Auto-follow state:
+    //  - follow=true  → keep the newest content pinned to the bottom
+    //  - follow=false → the user scrolled away; never fight their gesture
+    var follow by remember(chatId) { mutableStateOf(true) }
+    var didInitialScroll by remember(chatId) { mutableStateOf(false) }
 
     var input by rememberSaveable(chatId) { mutableStateOf("") }
     var attachment by remember(chatId) { mutableStateOf<PendingAttachment?>(null) }
@@ -189,19 +197,52 @@ fun ChatScreen(
     // The optional "load more" row is also a LazyColumn item.
     val itemCount = state.turns.size + extraRows + if (state.hasMore) 1 else 0
 
-    val stickToBottom by remember {
-        derivedStateOf { !listState.canScrollForward }
-    }
     val canScrollBackward by remember {
         derivedStateOf { listState.canScrollBackward }
     }
     val canScrollForward by remember {
         derivedStateOf { listState.canScrollForward }
     }
-    val lastContentLength = lastIteration?.content?.length ?: 0
-    LaunchedEffect(itemCount, lastContentLength, state.pendingUserText) {
-        if (itemCount > 0 && stickToBottom) {
+
+    // Changes whenever the visible tail grows: streamed text, reasoning, tool
+    // status/output, a new iteration/turn, or the optimistic pending message.
+    val followVersion = (state.turns.size.toLong() * 1_000_000L) +
+        (lastIteration?.content?.length ?: 0) +
+        (lastIteration?.reasoning?.length ?: 0) +
+        (lastTurn?.finalText?.length ?: 0) +
+        (lastIteration?.tools?.hashCode() ?: 0) +
+        (state.pendingUserText?.length ?: 0)
+
+    // Entering a session must land directly at the newest message, without
+    // animating through the whole history.
+    LaunchedEffect(state.loading, itemCount) {
+        if (!state.loading && itemCount > 0 && !didInitialScroll) {
             listState.scrollToBottom(itemCount)
+            didInitialScroll = true
+            follow = true
+        }
+    }
+
+    // Follow streaming output only while the user has not scrolled away.
+    LaunchedEffect(followVersion, follow, itemCount) {
+        if (follow && !state.loading && itemCount > 0) {
+            listState.scrollToBottom(itemCount)
+        }
+    }
+
+    // A real drag means the user is taking over; stop following immediately.
+    val isDragged by listState.interactionSource.collectIsDraggedAsState()
+    LaunchedEffect(isDragged) {
+        if (isDragged && listState.canScrollForward) {
+            follow = false
+        }
+    }
+
+    // If the user returns to the bottom (by drag/fling or the bottom button),
+    // resume following.
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.canScrollForward }.collect { canForward ->
+            if (!canForward) follow = true
         }
     }
 
