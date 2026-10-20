@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -185,7 +186,8 @@ fun ChatScreen(
         )
     val extraRows = (if (state.pendingUserText != null) 1 else 0) +
         (if (showThinking) 1 else 0)
-    val totalRows = state.turns.size + extraRows
+    // The optional "load more" row is also a LazyColumn item.
+    val itemCount = state.turns.size + extraRows + if (state.hasMore) 1 else 0
 
     val stickToBottom by remember {
         derivedStateOf { !listState.canScrollForward }
@@ -197,9 +199,9 @@ fun ChatScreen(
         derivedStateOf { listState.canScrollForward }
     }
     val lastContentLength = lastIteration?.content?.length ?: 0
-    LaunchedEffect(totalRows, lastContentLength, state.pendingUserText) {
-        if (totalRows > 0 && stickToBottom) {
-            listState.animateScrollToItem(totalRows - 1)
+    LaunchedEffect(itemCount, lastContentLength, state.pendingUserText) {
+        if (itemCount > 0 && stickToBottom) {
+            listState.scrollToBottom(itemCount)
         }
     }
 
@@ -373,11 +375,7 @@ fun ChatScreen(
                 if (canScrollForward) {
                     SmallFloatingActionButton(
                         onClick = {
-                            scope.launch {
-                                listState.animateScrollToItem(
-                                    (totalRows - 1).coerceAtLeast(0),
-                                )
-                            }
+                            scope.launch { listState.scrollToBottom(itemCount) }
                         },
                         containerColor = MaterialTheme.colorScheme.surface,
                         contentColor = MaterialTheme.colorScheme.primary,
@@ -401,6 +399,18 @@ fun ChatScreen(
             onDismiss = vm::dismissAskUser,
         )
     }
+}
+
+/**
+ * LazyList `scrollToItem(last)` aligns the TOP of the last item. A turn can be
+ * taller than the viewport (many iterations), so that is not the bottom of the
+ * conversation — both "top" and "bottom" appeared to jump to the top for long
+ * turns. Scroll by a large delta afterwards; LazyList clamps at the real end.
+ */
+private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToBottom(itemCount: Int) {
+    if (itemCount <= 0) return
+    scrollToItem(itemCount - 1)
+    scrollBy(100_000f)
 }
 
 @Composable
