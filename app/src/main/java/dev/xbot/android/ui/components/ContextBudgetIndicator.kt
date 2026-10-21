@@ -1,14 +1,12 @@
 package dev.xbot.android.ui.components
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -20,8 +18,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,70 +33,42 @@ private const val DANGER_FRACTION = 0.85f
 private val WarnColor = Color(0xFFF59E0B)
 
 @Composable
-fun budgetColor(percent: Float): Color = when {
+private fun budgetColor(percent: Float): Color = when {
     percent >= DANGER_FRACTION -> MaterialTheme.colorScheme.error
     percent >= WARN_FRACTION -> WarnColor
-    else -> MaterialTheme.colorScheme.primary
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 /**
- * 输入框右侧的上下文预算指示器：一个小圆环 + 百分比，点击看明细。
- * `budget == null`（服务端还没有真实 token 数据）时不占位。
+ * 输入框上方的上下文占用文字，形如 `85K/200K`（已用输入 / 上下文上限）。
+ * `budget == null`（服务端还没有真实 token 数据）时不占位 —— 连那一行高度也不留。
  */
 @Composable
-fun ContextBudgetIndicator(
+fun ContextBudgetLabel(
     budget: ContextBudgetUi?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (budget == null) return
 
-    val fraction = budget.percent.coerceIn(0f, 1f)
-    val color = budgetColor(fraction)
-    val track = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
-
-    Row(
+    val used = formatTokens(budget.promptTokens)
+    val cap = if (budget.maxContextTokens > 0L) formatTokens(budget.maxContextTokens) else "—"
+    Text(
+        text = "$used/$cap",
+        style = MaterialTheme.typography.labelSmall,
+        fontSize = 10.sp,
+        color = budgetColor(budget.percent.coerceIn(0f, 1f)),
+        maxLines = 1,
+        softWrap = false,
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(4.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 3.dp, vertical = 4.dp)
-            .semantics {
-                contentDescription = "上下文占用 ${budget.usedPercent}%，点按查看明细"
-            },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Canvas(Modifier.size(14.dp)) {
-            val strokeWidth = 2.dp.toPx()
-            drawArc(
-                color = track,
-                startAngle = 0f,
-                sweepAngle = 360f,
-                useCenter = false,
-                style = Stroke(width = strokeWidth),
-            )
-            if (fraction > 0f) {
-                drawArc(
-                    color = color,
-                    startAngle = -90f,
-                    sweepAngle = 360f * fraction,
-                    useCenter = false,
-                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
-                )
-            }
-        }
-        Spacer(Modifier.width(4.dp))
-        Text(
-            text = "${budget.usedPercent}%",
-            style = MaterialTheme.typography.labelSmall,
-            fontSize = 10.sp,
-            color = color,
-            maxLines = 1,
-            softWrap = false,
-        )
-    }
+            .padding(horizontal = 2.dp, vertical = 1.dp)
+            .semantics { contentDescription = "上下文占用 $used / $cap，点按查看明细" },
+    )
 }
 
-/** 点指示器弹出的明细。 */
+/** 点文字弹出的明细。 */
 @Composable
 fun ContextBudgetDialog(budget: ContextBudgetUi, onDismiss: () -> Unit) {
     AlertDialog(
@@ -161,8 +129,9 @@ private fun BudgetRow(label: String, value: String) {
     }
 }
 
+/** 12345 -> `12.3k`，1250000 -> `1.3M`。 */
 private fun formatTokens(value: Long): String = when {
     value >= 1_000_000L -> String.format(Locale.US, "%.1fM", value / 1_000_000.0)
-    value >= 1_000L -> String.format(Locale.US, "%.1fk", value / 1_000.0)
+    value >= 1_000L -> String.format(Locale.US, "%.1fK", value / 1_000.0)
     else -> value.toString()
 }

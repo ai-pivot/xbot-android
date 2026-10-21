@@ -100,6 +100,11 @@ fun Composer(
                     )
                 }
             }
+            ContextBudgetLabel(
+                budget = contextBudget,
+                onClick = { showBudget = true },
+                modifier = Modifier.align(Alignment.End),
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -114,10 +119,6 @@ fun Composer(
                     value = text,
                     onValueChange = onTextChange,
                     modifier = Modifier.weight(1f),
-                )
-                ContextBudgetIndicator(
-                    budget = contextBudget,
-                    onClick = { showBudget = true },
                 )
                 if (busy) {
                     CompactIconButton(

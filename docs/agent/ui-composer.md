@@ -1,7 +1,7 @@
 # 输入区（Composer）与上下文预算指示器
 
 `ui/components/Composer.kt` 是底部输入区（Scaffold 的 `bottomBar`）；
-`ui/components/ContextBudgetIndicator.kt` 是输入框右侧的上下文占用圆环 + 明细弹窗。
+`ui/components/ContextBudgetIndicator.kt` 是输入框**上方**那行上下文占用文字（`85K/200K`）+ 明细弹窗。
 
 ## 高度为什么用 BasicTextField 而不是 OutlinedTextField
 
@@ -45,5 +45,7 @@ Material3 的 `OutlinedTextField` / `TextField` 在**装饰盒内部**写死了 
 - `ContextBudgetUi`（`chat/ChatModels.kt`）：`promptTokens / maxContextTokens / percent(0..1) / model / exact`。
   `exact = false` 表示是自己估的，弹窗里会标注「回合进行中估算」。
 - 配色阈值：`< 60%` primary，`60%~85%` 琥珀 `0xFFF59E0B`，`>= 85%` error。
-- 指示器可点：弹出「上下文预算」对话框，显示已用输入 / 上限 / 占用 / 模型。
-  没有数据时（`contextBudget == null`）整个指示器不占位，所以输入区宽度不会跳。
+- 显示形式：输入框上方右对齐的一行小字 `已用输入/上下文上限`（如 `85K/200K`），
+  按 `formatTokens` 压缩成 K/M；上限未知时右半显示 `—`。
+- 文字可点：弹出「上下文预算」对话框，显示已用输入 / 上限 / 占用 / 模型。
+  没有数据时（`contextBudget == null`）**整行都不存在**，输入区高度与宽度都不会跳。
