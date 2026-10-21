@@ -5,6 +5,8 @@ import dev.xbot.android.data.HistoryMessage
 import dev.xbot.android.data.HistoryResponse
 import dev.xbot.android.data.ProgressEvent
 import dev.xbot.android.data.SessionEvent
+import dev.xbot.android.data.SessionStatusResponse
+import dev.xbot.android.data.TokenUsage
 import dev.xbot.android.data.WsMessage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -353,5 +355,214 @@ class ChatReducerTest {
         )
 
         assertFalse(state.busy)
+    }
+
+    // ------------------------------------------------------------------
+    // 上下文预算指示器
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `context budget prefers the server usage percent`() {
+        val state = ChatReducer.withContextBudget(
+            ChatReducer.empty("chat_1", "web"),
+            TokenUsage(
+                available = true,
+                promptTokens = 85_000,
+                maxContextTokens = 200_000,
+                usagePercent = 42.5,
+                model = "gpt-4o",
+            ),
+        )
+
+        val budget = state.contextBudget
+        assertNotNull(budget)
+        assertEquals(0.425f, budget!!.percent, 0.001f)
+        assertEquals(43, budget.usedPercent)
+        assertEquals(200_000L, budget.maxContextTokens)
+        assertEquals("gpt-4o", budget.model)
+        assertTrue(budget.exact)
+    }
+
+    @Test
+    fun `context budget falls back to prompt over max context`() {
+        val budget = ChatReducer.withContextBudget(
+            ChatReducer.empty("chat_1", "web"),
+            TokenUsage(available = true, promptTokens = 30_000, maxContextTokens = 120_000),
+        ).contextBudget!!
+
+        assertEquals(0.25f, budget.percent, 0.001f)
+        assertFalse(budget.exact)
+    }
+
+    @Test
+    fun `context budget is hidden until the server has real token data`() {
+        val state = ChatReducer.withContextBudget(
+            ChatReducer.empty("chat_1", "web").copy(
+                contextBudget = ContextBudgetUi(promptTokens = 1, percent = 0.5f),
+            ),
+            TokenUsage(available = false, usagePercent = null, promptTokens = 0),
+        )
+
+        assertNull(state.contextBudget)
+    }
+
+    @Test
+    fun `context budget clamps a percent above one hundred`() {
+        val budget = ChatReducer.withContextBudget(
+            ChatReducer.empty("chat_1", "web"),
+            TokenUsage(
+                available = true,
+                promptTokens = 300_000,
+                maxContextTokens = 200_000,
+                usagePercent = 150.0,
+            ),
+        ).contextBudget!!
+
+        assertEquals(1f, budget.percent, 0.0001f)
+        assertEquals(100, budget.usedPercent)
+    }
+
+    @Test
+    fun `progress token usage updates the budget while the turn runs`() {
+        val state = ChatReducer.applyProgress(
+            ChatReducer.empty("chat_1", "web").copy(
+                contextBudget = ContextBudgetUi(
+                    maxContextTokens = 1_000,
+                    percent = 0.1f,
+                    exact = true,
+                ),
+            ),
+            ProgressEvent(
+                turnId = 3,
+                iteration = 1,
+                phase = "running",
+                tokenUsage = TokenUsage(promptTokens = 250),
+            ),
+        )
+
+        val budget = state.contextBudget!!
+        assertEquals(250L, budget.promptTokens)
+        assertEquals(0.25f, budget.percent, 0.001f)
+        assertFalse(budget.exact)
+    }
+
+    @Test
+    fun `progress token usage without a known context cap leaves the budget alone`() {
+        val state = ChatReducer.applyProgress(
+            ChatReducer.empty("chat_1", "web"),
+            ProgressEvent(
+                iteration = 1,
+                phase = "running",
+                tokenUsage = TokenUsage(promptTokens = 250),
+            ),
+        )
+
+        assertNull(state.contextBudget)
+    }
+
+    @Test
+    fun `session status stores the working directory and the budget`() {
+        val state = ChatReducer.withSessionStatus(
+            ChatReducer.empty("chat_1", "web"),
+            SessionStatusResponse(
+                cwd = "/home/cjw/xbot-android",
+                tokenUsage = TokenUsage(
+                    available = true,
+                    promptTokens = 20_000,
+                    maxContextTokens = 200_000,
+                ),
+            ),
+        )
+
+        assertEquals("/home/cjw/xbot-android", state.cwd)
+        assertEquals(0.1f, state.contextBudget!!.percent, 0.001f)
+    }
+
+    @Test
+    fun `blank cwd from the server keeps the previous working directory`() {
+        val state = ChatReducer.withSessionStatus(
+            ChatReducer.empty("chat_1", "web").copy(cwd = "/keep/me"),
+            SessionStatusResponse(cwd = "", tokenUsage = null),
+        )
+
+        assertEquals("/keep/me", state.cwd)
+        assertNull(state.contextBudget)
+    }
+
+    @Test
+    fun `progress carries the working directory`() {
+        val state = ChatReducer.applyProgress(
+            ChatReducer.empty("chat_1", "web"),
+            ProgressEvent(turnId = 1, iteration = 1, phase = "running", cwd = "/tmp/work"),
+        )
+
+        assertEquals("/tmp/work", state.cwd)
+    }
+
+    @Test
+    fun `history rewound session event asks for a replacing reload`() {
+        val state = ChatReducer.applyEvent(
+            ChatReducer.empty("chat_1", "web"),
+            WsMessage(
+                type = "session",
+                session = SessionEvent(action = "history_rewound", chatId = "chat_1"),
+            ),
+        )
+
+        assertTrue(state.needsReload)
+        assertTrue(state.reloadReplacesHistory)
+    }
+
+    @Test
+    fun `applying a fresh history clears the replacing-reload flag`() {
+        val state = ChatReducer.withHistory(
+            ChatReducer.empty("chat_1", "web").copy(
+                needsReload = true,
+                reloadReplacesHistory = true,
+            ),
+            HistoryResponse(ok = true, messages = emptyList()),
+        )
+
+        assertFalse(state.needsReload)
+        assertFalse(state.reloadReplacesHistory)
+    }
+
+    @Test
+    fun `replace reload drops turns the server no longer returns`() {
+        // 回退后服务端只剩 turn 1；合并式重载会保留 turn 2（旧 bug），整体替换才清掉。
+        val before = ChatReducer.withHistory(
+            ChatReducer.empty("chat_1", "web"),
+            HistoryResponse(
+                ok = true,
+                messages = listOf(
+                    HistoryMessage(id = 1, role = "user", content = "keep me", turnId = 1),
+                    HistoryMessage(id = 2, role = "user", content = "rewound", turnId = 2),
+                ),
+            ),
+        )
+        assertEquals(2, before.turns.size)
+
+        val replaced = ChatReducer.withHistory(
+            before,
+            HistoryResponse(
+                ok = true,
+                messages = listOf(
+                    HistoryMessage(id = 1, role = "user", content = "keep me", turnId = 1),
+                ),
+            ),
+        )
+        assertEquals(listOf(1L), replaced.turns.map { it.turnId })
+
+        // 同一份响应走合并路径时旧 turn 会留下 —— 这正是之前必须退出会话才生效的原因。
+        val merged = ChatReducer.mergeLatestHistory(
+            before,
+            HistoryResponse(
+                ok = true,
+                messages = listOf(
+                    HistoryMessage(id = 1, role = "user", content = "keep me", turnId = 1),
+                ),
+            ),
+        )
+        assertEquals(listOf(1L, 2L), merged.turns.map { it.turnId })
     }
 }

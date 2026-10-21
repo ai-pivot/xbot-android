@@ -56,6 +56,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.xbot.android.data.UserChat
+import dev.xbot.android.ui.components.PathText
 import dev.xbot.android.update.UpdateViewModel
 import java.time.Instant
 
@@ -505,11 +506,18 @@ private fun SessionRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Text(
-                    relativeTime(chat.lastActive),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PathText(
+                        path = chat.workDir,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (chat.workDir.isNotBlank()) Spacer(Modifier.width(8.dp))
+                    Text(
+                        relativeTime(chat.lastActive),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Box {
                 IconButton(onClick = { menu = true }) {

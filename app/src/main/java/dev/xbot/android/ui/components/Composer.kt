@@ -1,16 +1,19 @@
 package dev.xbot.android.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
@@ -20,14 +23,28 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import dev.xbot.android.chat.ContextBudgetUi
 
+/**
+ * 底部输入区。
+ *
+ * 高度按「一行文字」压缩过：`OutlinedTextField` 自带 56dp 的最小高度（装饰盒内固定），
+ * 换成了 `BasicTextField` + 自己的圆角背景，行高约 36dp，整条输入区比原来矮 20dp 左右。
+ */
 @Composable
 fun Composer(
     text: String,
@@ -39,7 +56,11 @@ fun Composer(
     onSend: () -> Unit,
     onCancel: () -> Unit,
     sending: Boolean = false,
+    contextBudget: ContextBudgetUi? = null,
+    cwd: String = "",
 ) {
+    var showBudget by remember { mutableStateOf(false) }
+
     Surface(
         tonalElevation = 3.dp,
         shadowElevation = 8.dp,
@@ -50,7 +71,7 @@ fun Composer(
                 .fillMaxWidth()
                 .imePadding()
                 .navigationBarsPadding()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp, vertical = 6.dp),
         ) {
             if (attachmentName != null) {
                 Row(
@@ -59,62 +80,154 @@ fun Composer(
                 ) {
                     AssistChip(
                         onClick = {},
-                        label = { Text(attachmentName, maxLines = 1) },
+                        label = {
+                            Text(
+                                attachmentName,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                            )
+                        },
                         trailingIcon = {
                             IconButton(
                                 onClick = onClearAttachment,
-                                modifier = Modifier.size(22.dp),
+                                modifier = Modifier.size(20.dp),
                             ) {
                                 Icon(
                                     Icons.Filled.Close,
                                     contentDescription = "移除附件",
-                                    modifier = Modifier.size(15.dp),
+                                    modifier = Modifier.size(14.dp),
                                 )
                             }
                         },
                     )
                 }
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                IconButton(onClick = onPickAttachment) {
-                    Icon(Icons.Outlined.AttachFile, contentDescription = "添加附件")
-                }
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = onTextChange,
-                    minLines = 1,
-                    maxLines = 6,
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.weight(1f),
-                )
-                if (busy) {
-                    IconButton(onClick = onCancel) {
-                        Icon(
-                            Icons.Filled.Stop,
-                            contentDescription = "停止生成",
-                            tint = MaterialTheme.colorScheme.error,
+            // 工作目录与上下文占用同处一行、整体居中：两者都没有时这一行不存在。
+            if (cwd.isNotBlank() || contextBudget != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PathText(
+                        path = cwd,
+                        modifier = Modifier.widthIn(max = 150.dp),
+                    )
+                    if (cwd.isNotBlank() && contextBudget != null) {
+                        Text(
+                            text = " · ",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false,
                         )
                     }
-                }
-                IconButton(
-                    onClick = onSend,
-                    enabled = text.isNotBlank() && !sending,
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "发送",
-                        tint = if (text.isNotBlank()) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.outline
-                        },
+                    ContextBudgetLabel(
+                        budget = contextBudget,
+                        onClick = { showBudget = true },
                     )
                 }
             }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                CompactIconButton(
+                    icon = Icons.Outlined.AttachFile,
+                    description = "添加附件",
+                    onClick = onPickAttachment,
+                )
+                CompactInput(
+                    value = text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier.weight(1f),
+                )
+                if (busy) {
+                    CompactIconButton(
+                        icon = Icons.Filled.Stop,
+                        description = "停止生成",
+                        tint = MaterialTheme.colorScheme.error,
+                        onClick = onCancel,
+                    )
+                }
+                CompactIconButton(
+                    icon = Icons.AutoMirrored.Filled.Send,
+                    description = "发送",
+                    enabled = text.isNotBlank() && !sending,
+                    tint = if (text.isNotBlank()) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.outline
+                    },
+                    onClick = onSend,
+                )
+            }
         }
+    }
+
+    if (showBudget) {
+        contextBudget?.let { budget ->
+            ContextBudgetDialog(budget = budget, onDismiss = { showBudget = false })
+        }
+    }
+}
+
+/** 单行起、最多 6 行自增长；最小高度约 36dp（原 `OutlinedTextField` 是 56dp）。 */
+@Composable
+private fun CompactInput(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(18.dp)
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f), shape)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        if (value.isEmpty()) {
+            Text(
+                text = "发消息…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                maxLines = 1,
+            )
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            maxLines = 6,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun CompactIconButton(
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(36.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            modifier = Modifier.size(20.dp),
+            tint = tint,
+        )
     }
 }

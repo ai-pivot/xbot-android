@@ -3,6 +3,7 @@ package dev.xbot.android.chat
 import dev.xbot.android.data.AskUserQuestion
 import dev.xbot.android.data.QueueItem
 import dev.xbot.android.data.TodoItem
+import kotlin.math.roundToInt
 
 data class ToolUi(
     val key: String,
@@ -43,10 +44,28 @@ data class AskUserUi(
     val questions: List<AskUserQuestion>,
 )
 
+/**
+ * 上下文预算：服务端 token 用量在 UI 侧的投影。
+ *
+ * [percent] 已归一化到 0..1；[exact] 为 true 表示来自服务端 `usage_percent`，
+ * false 表示用 `prompt_tokens / max_context_tokens` 自己估的（回合进行中的实时值）。
+ */
+data class ContextBudgetUi(
+    val promptTokens: Long = 0L,
+    val maxContextTokens: Long = 0L,
+    val percent: Float = 0f,
+    val model: String = "",
+    val exact: Boolean = false,
+) {
+    val usedPercent: Int get() = (percent * 100f).roundToInt().coerceIn(0, 100)
+}
+
 data class ChatUiState(
     val chatId: String = "",
     val channel: String = "web",
     val title: String = "",
+    /** 该会话的工作目录（服务端 work_dir / session status 的 cwd）。 */
+    val cwd: String = "",
     val loading: Boolean = false,
     val error: String? = null,
     val connected: Boolean = false,
@@ -62,7 +81,11 @@ data class ChatUiState(
     val loadingMore: Boolean = false,
     val loadMoreError: String? = null,
     val needsReload: Boolean = false,
+    /** needsReload 的语义补充：历史被截断（回退），重载必须整体替换而不是合并。 */
+    val reloadReplacesHistory: Boolean = false,
     val pendingUserText: String? = null,
+    /** null = 服务端还没有真实 token 数据（新会话 / 未发起过 LLM 调用）。 */
+    val contextBudget: ContextBudgetUi? = null,
 ) {
     val isEmpty: Boolean get() = turns.isEmpty() && pendingUserText == null
 }

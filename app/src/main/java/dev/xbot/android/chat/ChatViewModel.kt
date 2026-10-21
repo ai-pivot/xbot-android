@@ -28,6 +28,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var eventsJob: Job? = null
     private var sseStateJob: Job? = null
     private var loadJob: Job? = null
+    private var budgetJob: Job? = null
 
     private var chatId = ""
     private var channel = "web"
@@ -47,7 +48,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         reload()
     }
 
-    fun reload() {
+    /**
+     * Reload the newest page of history.
+     *
+     * [replaceTurns] must be true whenever the server may have **removed** turns
+     * (rewind, or any truncation): merging keeps turns that no longer exist
+     * server-side, which is exactly why a rewound message used to stay on screen
+     * until the chat was reopened. Normal reloads keep the merge so pages loaded
+     * by scrolling up are not thrown away.
+     */
+    fun reload(replaceTurns: Boolean = false) {
         if (chatId.isBlank() || reloading) return
         reloading = true
         loadJob?.cancel()
@@ -57,19 +67,36 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     api.history(chatId, channel, historyLimit, 0)
                 }
                 _state.update { current ->
-                    if (current.turns.isNotEmpty() && current.oldestId > 0L) {
+                    if (!replaceTurns && current.turns.isNotEmpty() && current.oldestId > 0L) {
                         ChatReducer.mergeLatestHistory(current, response)
                     } else {
                         ChatReducer.withHistory(current, response)
                     }
                 }
                 restorePendingAskUser()
+                refreshContextBudget()
             } catch (e: UnauthorizedException) {
                 _state.update { it.copy(loading = false, error = "登录已失效，请重新登录") }
             } catch (e: Exception) {
                 _state.update { it.copy(loading = false, error = e.message ?: "加载失败") }
             } finally {
                 reloading = false
+            }
+        }
+    }
+
+    /**
+     * 拉一次 `/api/session/status` 刷新上下文预算。
+     * 失败静默：指示器只是辅助信息，不该因为它弹错误条。
+     */
+    fun refreshContextBudget() {
+        if (chatId.isBlank()) return
+        budgetJob?.cancel()
+        budgetJob = viewModelScope.launch {
+            runCatching {
+                withAuthRetry { api.sessionStatus(chatId, channel) }
+            }.onSuccess { status ->
+                _state.update { ChatReducer.withSessionStatus(it, status) }
             }
         }
     }
@@ -182,7 +209,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun acknowledgeReload() {
-        _state.update { it.copy(needsReload = false) }
+        _state.update { it.copy(needsReload = false, reloadReplacesHistory = false) }
     }
 
     private fun startStream() {
@@ -190,10 +217,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         sse = client
         eventsJob = viewModelScope.launch {
             client.events.collect { message ->
+                val wasBusy = _state.value.busy
                 _state.update { ChatReducer.applyEvent(it, message) }
+                // 回合结束（busy 由 true 转 false）时服务端才拿到最终 token 数，
+                // 这时刷新一次上下文预算，指示器才不会停在回合中途的估值上。
+                if (wasBusy && !_state.value.busy) refreshContextBudget()
                 if (_state.value.needsReload) {
+                    val replace = _state.value.reloadReplacesHistory
                     acknowledgeReload()
-                    reload()
+                    reload(replaceTurns = replace)
                 }
             }
         }
@@ -235,6 +267,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun closeStream() {
+        budgetJob?.cancel()
         eventsJob?.cancel()
         sseStateJob?.cancel()
         eventsJob = null

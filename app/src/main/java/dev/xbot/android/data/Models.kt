@@ -115,12 +115,17 @@ data class GoalInfo(
 
 @Serializable
 data class TokenUsage(
+    @SerialName("available") val available: Boolean = false,
     @SerialName("prompt_tokens") val promptTokens: Long = 0L,
     @SerialName("completion_tokens") val completionTokens: Long = 0L,
     @SerialName("total_tokens") val totalTokens: Long = 0L,
     @SerialName("cache_hit_tokens") val cacheHitTokens: Long = 0L,
     @SerialName("max_output_tokens") val maxOutputTokens: Long = 0L,
+    @SerialName("max_context_tokens") val maxContextTokens: Long = 0L,
+    /** 0..100，null 表示服务端还没有真实 token 数据（尚未发起过 LLM 调用）。 */
+    @SerialName("usage_percent") val usagePercent: Double? = null,
     @SerialName("context_usage_percent") val contextUsagePercent: Double = 0.0,
+    val model: String = "",
 )
 
 @Serializable

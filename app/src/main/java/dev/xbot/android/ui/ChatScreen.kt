@@ -76,6 +76,7 @@ import dev.xbot.android.chat.ChatViewModel
 import dev.xbot.android.chat.IterationUi
 import dev.xbot.android.chat.TurnUi
 import dev.xbot.android.data.ModelEntry
+import dev.xbot.android.data.RewindResponse
 import dev.xbot.android.data.SessionModel
 import dev.xbot.android.ui.components.AskUserDialog
 import dev.xbot.android.ui.components.AutoLinkText
@@ -464,6 +465,8 @@ fun ChatScreen(
                 onSend = { submit() },
                 onCancel = vm::cancel,
                 sending = sending,
+                contextBudget = state.contextBudget,
+                cwd = state.cwd,
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
@@ -650,8 +653,9 @@ fun ChatScreen(
                         app.container.api.rewindHistory(chatId, channel, historyId)
                     }.onSuccess { response ->
                         if (response.draft.isNotBlank()) input = response.draft
-                        vm.reload()
-                        snackbar.showSnackbar("已回退，原消息已放回输入框")
+                        // 回退是「删掉」历史，必须整体替换，合并会把已回退的 turn 留在屏幕上。
+                        vm.reload(replaceTurns = true)
+                        snackbar.showSnackbar(rewindMessage(response))
                     }.onFailure {
                         snackbar.showSnackbar(it.message ?: "回退失败")
                     }
@@ -822,5 +826,25 @@ private fun ThinkingRow() {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/**
+ * 回退结果文案。历史与文件快照是两件独立的事：
+ * `history_rewound` 为 false 表示历史没截断（回退实际没生效），
+ * `files_rewound` 为 false 但 `checkpoint_error` 非空表示历史回退了、文件没恢复。
+ * 这两件事都不能用一句"已回退"盖掉。
+ */
+private fun rewindMessage(response: RewindResponse): String {
+    if (!response.historyRewound) {
+        val reason = response.checkpointError.ifBlank { "服务端未截断历史" }
+        return "回退未生效：$reason"
+    }
+    val draftNote = if (response.draft.isNotBlank()) "，原消息已放回输入框" else ""
+    return when {
+        response.filesRewound -> "已回退，文件改动已一并恢复$draftNote"
+        response.checkpointError.isNotBlank() ->
+            "已回退$draftNote（文件未回退：${response.checkpointError}）"
+        else -> "已回退$draftNote"
     }
 }
