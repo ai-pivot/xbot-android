@@ -464,6 +464,7 @@ fun ChatScreen(
                 onSend = { submit() },
                 onCancel = vm::cancel,
                 sending = sending,
+                contextBudget = state.contextBudget,
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },

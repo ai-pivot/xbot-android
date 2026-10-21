@@ -28,6 +28,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var eventsJob: Job? = null
     private var sseStateJob: Job? = null
     private var loadJob: Job? = null
+    private var budgetJob: Job? = null
 
     private var chatId = ""
     private var channel = "web"
@@ -64,12 +65,29 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 restorePendingAskUser()
+                refreshContextBudget()
             } catch (e: UnauthorizedException) {
                 _state.update { it.copy(loading = false, error = "登录已失效，请重新登录") }
             } catch (e: Exception) {
                 _state.update { it.copy(loading = false, error = e.message ?: "加载失败") }
             } finally {
                 reloading = false
+            }
+        }
+    }
+
+    /**
+     * 拉一次 `/api/session/status` 刷新上下文预算。
+     * 失败静默：指示器只是辅助信息，不该因为它弹错误条。
+     */
+    fun refreshContextBudget() {
+        if (chatId.isBlank()) return
+        budgetJob?.cancel()
+        budgetJob = viewModelScope.launch {
+            runCatching {
+                withAuthRetry { api.sessionStatus(chatId, channel) }
+            }.onSuccess { status ->
+                _state.update { ChatReducer.withContextBudget(it, status.tokenUsage) }
             }
         }
     }
@@ -190,7 +208,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         sse = client
         eventsJob = viewModelScope.launch {
             client.events.collect { message ->
+                val wasBusy = _state.value.busy
                 _state.update { ChatReducer.applyEvent(it, message) }
+                // 回合结束（busy 由 true 转 false）时服务端才拿到最终 token 数，
+                // 这时刷新一次上下文预算，指示器才不会停在回合中途的估值上。
+                if (wasBusy && !_state.value.busy) refreshContextBudget()
                 if (_state.value.needsReload) {
                     acknowledgeReload()
                     reload()
@@ -235,6 +257,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun closeStream() {
+        budgetJob?.cancel()
         eventsJob?.cancel()
         sseStateJob?.cancel()
         eventsJob = null

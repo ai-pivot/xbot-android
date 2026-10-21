@@ -257,6 +257,21 @@ class XbotApi(private val prefs: AppPrefs) {
         }.getOrNull()
     }
 
+    /**
+     * 轻量会话状态：只返回 token 用量与 cwd。
+     * 上下文预算指示器就靠它的 `token_usage.max_context_tokens / usage_percent`。
+     */
+    suspend fun sessionStatus(
+        chatId: String,
+        channel: String = "web",
+    ): SessionStatusResponse {
+        val body = buildJsonObject {
+            put("chat_id", chatId)
+            put("channel", channel)
+        }.toString()
+        return decodeEnvelope(execute(post("/api/session/status", body)))
+    }
+
     // ------------------------------------------------------------------
     // Models & user settings
     // ------------------------------------------------------------------

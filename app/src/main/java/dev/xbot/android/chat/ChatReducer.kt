@@ -5,6 +5,7 @@ import dev.xbot.android.data.HistoryIteration
 import dev.xbot.android.data.HistoryMessage
 import dev.xbot.android.data.HistoryResponse
 import dev.xbot.android.data.ProgressEvent
+import dev.xbot.android.data.TokenUsage
 import dev.xbot.android.data.ToolProgress
 import dev.xbot.android.data.WsMessage
 import kotlinx.serialization.decodeFromString
@@ -24,6 +25,59 @@ object ChatReducer {
 
     fun empty(chatId: String, channel: String, title: String = ""): ChatUiState =
         ChatUiState(chatId = chatId, channel = channel, title = title, loading = true)
+
+    /**
+     * 应用 `/api/session/status` 返回的 `token_usage`。
+     *
+     * 服务端只在拿到真实 API token 数之后才置 `available`；新会话（还没跑过 LLM）
+     * 会返回 available=false 且没有 usage_percent —— 这时清掉指示器，而不是画一个 0%。
+     */
+    fun withContextBudget(state: ChatUiState, usage: TokenUsage?): ChatUiState {
+        if (usage == null) return state.copy(contextBudget = null)
+
+        val serverPercent = usage.usagePercent?.takeIf { it > 0.0 || usage.available }
+        val max = usage.maxContextTokens.takeIf { it > 0L }
+        val hasData = usage.available || serverPercent != null || usage.promptTokens > 0L
+        if (!hasData) return state.copy(contextBudget = null)
+
+        val percent = when {
+            serverPercent != null -> (serverPercent / 100.0).toFloat()
+            max != null && usage.promptTokens > 0L -> usage.promptTokens.toFloat() / max
+            else -> 0f
+        }
+        return state.copy(
+            contextBudget = ContextBudgetUi(
+                promptTokens = usage.promptTokens,
+                maxContextTokens = max ?: 0L,
+                percent = percent.coerceIn(0f, 1f),
+                model = usage.model,
+                exact = serverPercent != null,
+            ),
+        )
+    }
+
+    /**
+     * 回合进行中 progress 事件只带 `prompt_tokens`（没有 max_context），
+     * 用上一次 status 拿到的上限做分母，让指示器随回合推进实时变化。
+     * 不知道上限时保持原样——宁可不动，也不要显示一个凭空的百分比。
+     */
+    private fun ChatUiState.withLiveTokenUsage(usage: TokenUsage): ChatUiState {
+        val prompt = usage.promptTokens
+        if (prompt <= 0L) return this
+        val current = contextBudget
+        val max = current?.maxContextTokens?.takeIf { it > 0L }
+            ?: usage.maxContextTokens.takeIf { it > 0L }
+            ?: return this
+        return copy(
+            contextBudget = ContextBudgetUi(
+                promptTokens = prompt,
+                maxContextTokens = max,
+                percent = (prompt.toFloat() / max).coerceIn(0f, 1f),
+                model = usage.model.ifBlank { current?.model.orEmpty() },
+                exact = false,
+            ),
+        )
+    }
 
     fun withHistory(state: ChatUiState, response: HistoryResponse): ChatUiState {
         val turns = LinkedHashMap<Long, TurnUi>()
@@ -152,6 +206,8 @@ object ChatReducer {
 
     fun applyProgress(state: ChatUiState, progress: ProgressEvent): ChatUiState {
         var next = state
+        // 回合进行中的 token 用量先落到预算指示器上，再处理 turn/iteration。
+        progress.tokenUsage?.let { usage -> next = next.withLiveTokenUsage(usage) }
         var turnId = progress.turnId.takeIf { it > 0L } ?: state.liveTurnId
 
         progress.turnStart?.let { start ->

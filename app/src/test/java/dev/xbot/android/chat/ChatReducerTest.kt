@@ -5,6 +5,7 @@ import dev.xbot.android.data.HistoryMessage
 import dev.xbot.android.data.HistoryResponse
 import dev.xbot.android.data.ProgressEvent
 import dev.xbot.android.data.SessionEvent
+import dev.xbot.android.data.TokenUsage
 import dev.xbot.android.data.WsMessage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -353,5 +354,108 @@ class ChatReducerTest {
         )
 
         assertFalse(state.busy)
+    }
+
+    // ------------------------------------------------------------------
+    // 上下文预算指示器
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `context budget prefers the server usage percent`() {
+        val state = ChatReducer.withContextBudget(
+            ChatReducer.empty("chat_1", "web"),
+            TokenUsage(
+                available = true,
+                promptTokens = 85_000,
+                maxContextTokens = 200_000,
+                usagePercent = 42.5,
+                model = "gpt-4o",
+            ),
+        )
+
+        val budget = state.contextBudget
+        assertNotNull(budget)
+        assertEquals(0.425f, budget!!.percent, 0.001f)
+        assertEquals(43, budget.usedPercent)
+        assertEquals(200_000L, budget.maxContextTokens)
+        assertEquals("gpt-4o", budget.model)
+        assertTrue(budget.exact)
+    }
+
+    @Test
+    fun `context budget falls back to prompt over max context`() {
+        val budget = ChatReducer.withContextBudget(
+            ChatReducer.empty("chat_1", "web"),
+            TokenUsage(available = true, promptTokens = 30_000, maxContextTokens = 120_000),
+        ).contextBudget!!
+
+        assertEquals(0.25f, budget.percent, 0.001f)
+        assertFalse(budget.exact)
+    }
+
+    @Test
+    fun `context budget is hidden until the server has real token data`() {
+        val state = ChatReducer.withContextBudget(
+            ChatReducer.empty("chat_1", "web").copy(
+                contextBudget = ContextBudgetUi(promptTokens = 1, percent = 0.5f),
+            ),
+            TokenUsage(available = false, usagePercent = null, promptTokens = 0),
+        )
+
+        assertNull(state.contextBudget)
+    }
+
+    @Test
+    fun `context budget clamps a percent above one hundred`() {
+        val budget = ChatReducer.withContextBudget(
+            ChatReducer.empty("chat_1", "web"),
+            TokenUsage(
+                available = true,
+                promptTokens = 300_000,
+                maxContextTokens = 200_000,
+                usagePercent = 150.0,
+            ),
+        ).contextBudget!!
+
+        assertEquals(1f, budget.percent, 0.0001f)
+        assertEquals(100, budget.usedPercent)
+    }
+
+    @Test
+    fun `progress token usage updates the budget while the turn runs`() {
+        val state = ChatReducer.applyProgress(
+            ChatReducer.empty("chat_1", "web").copy(
+                contextBudget = ContextBudgetUi(
+                    maxContextTokens = 1_000,
+                    percent = 0.1f,
+                    exact = true,
+                ),
+            ),
+            ProgressEvent(
+                turnId = 3,
+                iteration = 1,
+                phase = "running",
+                tokenUsage = TokenUsage(promptTokens = 250),
+            ),
+        )
+
+        val budget = state.contextBudget!!
+        assertEquals(250L, budget.promptTokens)
+        assertEquals(0.25f, budget.percent, 0.001f)
+        assertFalse(budget.exact)
+    }
+
+    @Test
+    fun `progress token usage without a known context cap leaves the budget alone`() {
+        val state = ChatReducer.applyProgress(
+            ChatReducer.empty("chat_1", "web"),
+            ProgressEvent(
+                iteration = 1,
+                phase = "running",
+                tokenUsage = TokenUsage(promptTokens = 250),
+            ),
+        )
+
+        assertNull(state.contextBudget)
     }
 }
