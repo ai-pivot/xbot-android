@@ -102,6 +102,14 @@ class AppPrefs(context: Context) {
         get() = prefs.getString(KEY_UPDATE_URL, "").orEmpty()
         set(value) = prefs.edit().putString(KEY_UPDATE_URL, value.trim()).apply()
 
+    /**
+     * Public origin used to rewrite localhost/127.0.0.1 image URLs
+     * (e.g. https://minio.cjiw.site). Empty disables rewriting.
+     */
+    var mediaBaseUrl: String
+        get() = prefs.getString(KEY_MEDIA_URL, DEFAULT_MEDIA_BASE_URL).orEmpty()
+        set(value) = prefs.edit().putString(KEY_MEDIA_URL, value.trim()).apply()
+
     var lastUpdateCheckAt: Long
         get() = prefs.getLong(KEY_UPDATE_CHECK_AT, 0L)
         set(value) = prefs.edit().putLong(KEY_UPDATE_CHECK_AT, value).apply()
@@ -132,5 +140,8 @@ class AppPrefs(context: Context) {
         const val KEY_COOKIES = "cookies"
         const val KEY_UPDATE_URL = "update_manifest_url"
         const val KEY_UPDATE_CHECK_AT = "update_last_check_at"
+        const val KEY_MEDIA_URL = "media_base_url"
     }
 }
+
+const val DEFAULT_MEDIA_BASE_URL = "https://minio.cjiw.site"

@@ -150,6 +150,10 @@ fun MarkdownText(
                     }
                 }
 
+                is MdBlock.Mermaid -> MermaidView(block.code)
+
+                is MdBlock.Image -> MarkdownImage(block.alt, block.url)
+
                 is MdBlock.Table -> MarkdownTable(block)
 
                 MdBlock.Rule -> Box(
@@ -429,6 +433,8 @@ private sealed interface MdBlock {
     data class Bullets(val items: List<String>) : MdBlock
     data class Numbered(val items: List<String>) : MdBlock
     data class Code(val language: String, val code: String) : MdBlock
+    data class Mermaid(val code: String) : MdBlock
+    data class Image(val alt: String, val url: String) : MdBlock
     data class Table(
         val headers: List<String>,
         val rows: List<List<String>>,
@@ -440,6 +446,7 @@ private sealed interface MdBlock {
 private enum class TableAlign { Start, Center, End }
 
 private val INLINE_REGEX = Regex("""(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\n]+\))""")
+private val IMAGE_BLOCK = Regex("""^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$""")
 private val HEADING = Regex("""^(#{1,6})\s+(.*)$""")
 private val BULLET = Regex("""^\s*[-*+]\s+(.*)$""")
 private val NUMBERED = Regex("""^\s*\d+\.\s+(.*)$""")
@@ -471,12 +478,25 @@ private fun parseMarkdown(text: String): List<MdBlock> {
                 index++
             }
             if (index < lines.size) index++
-            blocks += MdBlock.Code(language, code.toString())
+            val codeText = code.toString()
+            if (language.equals("mermaid", ignoreCase = true)) {
+                blocks += MdBlock.Mermaid(codeText)
+            } else {
+                blocks += MdBlock.Code(language, codeText)
+            }
             continue
         }
 
         if (trimmed.isEmpty()) {
             flushParagraph()
+            index++
+            continue
+        }
+
+        val image = IMAGE_BLOCK.matchEntire(trimmed)
+        if (image != null) {
+            flushParagraph()
+            blocks += MdBlock.Image(image.groupValues[1], image.groupValues[2])
             index++
             continue
         }
