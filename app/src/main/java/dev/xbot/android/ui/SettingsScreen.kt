@@ -382,6 +382,13 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+                updateState.note?.let { note ->
+                    Text(
+                        note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 val manifest = updateState.manifest
                 if (manifest != null) {
                     if (updateState.available) {

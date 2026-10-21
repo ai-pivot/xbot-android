@@ -51,6 +51,20 @@ jobs:
             exit 1
           fi
 
+      - name: Verify versionCode is ahead of the dev channel
+        run: |
+          set -euo pipefail
+          VERSION_CODE=$(awk -F= '/^versionCode=/{print $2}' version.properties)
+          DEV_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/dev/latest-dev.json"
+          DEV_CODE=$(curl -fsSL "$DEV_URL" 2>/dev/null \
+            | python3 -c 'import json,sys;print(json.load(sys.stdin).get("versionCode",0))' \
+            2>/dev/null || echo 0)
+          echo "stable versionCode=$VERSION_CODE, latest dev versionCode=$DEV_CODE"
+          if [ "$VERSION_CODE" -le "$DEV_CODE" ]; then
+            echo "::error::versionCode $VERSION_CODE must be greater than the latest dev build ($DEV_CODE). Set versionCode=$((DEV_CODE + 1)) in version.properties."
+            exit 1
+          fi
+
       - name: Restore signing material
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -80,17 +94,34 @@ jobs:
           SIZE=$(stat -c%s "$APK")
           SHA=$(sha256sum "$APK" | awk '{print $1}')
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/xbot-android-${VERSION_CODE}.apk"
-          CHANGELOG=$(cat CHANGELOG.md 2>/dev/null || true)
-          if [ -z "$CHANGELOG" ]; then
-            CHANGELOG="Release ${VERSION_NAME}"
-          fi
-          python3 - "$SIZE" "$SHA" "$VERSION_CODE" "$VERSION_NAME" "$URL" "$CHANGELOG" > latest.json <<'PY'
+          python3 - "$SIZE" "$SHA" "$VERSION_CODE" "$VERSION_NAME" "$URL" "$GITHUB_SHA" \
+            "stable" > latest.json <<'PY'
           import datetime
           import json
+          import os
+          import re
           import sys
 
-          size, sha, code, name, url, changelog = sys.argv[1:7]
+          size, sha, code, name, url, commit, channel = sys.argv[1:8]
+
+          # Pull only the section for this version out of CHANGELOG.md; the whole
+          # file would flood the in-app update card with every past release.
+          changelog = ""
+          if os.path.exists("CHANGELOG.md"):
+              text = open("CHANGELOG.md", encoding="utf-8").read()
+              match = re.search(
+                  r"^## \[%s\][^\n]*\n(.*?)(?=^## \[|\Z)" % re.escape(name),
+                  text,
+                  re.M | re.S,
+              )
+              if match:
+                  changelog = match.group(1).strip()
+          if not changelog:
+              changelog = "Release %s" % name
+
           print(json.dumps({
+              "schema": 2,
+              "channel": channel,
               "versionCode": int(code),
               "versionName": name,
               "minSdk": 26,
@@ -102,8 +133,10 @@ jobs:
               "publishedAt": datetime.datetime.now(datetime.timezone.utc).strftime(
                   "%Y-%m-%dT%H:%M:%SZ"
               ),
+              "commit": commit[:7],
           }, ensure_ascii=False, indent=2))
           PY
+          cat latest.json
 
       - name: Create GitHub Release
         env:

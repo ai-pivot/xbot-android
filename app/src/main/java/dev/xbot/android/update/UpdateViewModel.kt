@@ -36,6 +36,8 @@ data class UpdateUiState(
     val manifest: UpdateManifest? = null,
     val available: Boolean = false,
     val upToDate: Boolean = false,
+    /** Set when the manifest is older than this install, e.g. after a channel switch. */
+    val note: String? = null,
     val downloading: Boolean = false,
     val progress: Float = 0f,
     val verifying: Boolean = false,
@@ -113,6 +115,13 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
                         manifest = manifest,
                         available = available,
                         upToDate = !available,
+                        note = if (!available && manifest.versionCode < BuildConfig.VERSION_CODE) {
+                            "清单中的版本 ${manifest.versionName} (${manifest.versionCode}) 低于当前安装的 " +
+                                "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})，" +
+                                "Android 不允许降级安装；如需回退请卸载后重装。"
+                        } else {
+                            null
+                        },
                     )
                 }
             } catch (e: Exception) {

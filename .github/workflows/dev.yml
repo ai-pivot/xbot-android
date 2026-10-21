@@ -1,0 +1,171 @@
+name: Dev build
+
+# Every push to master publishes a dev-channel build. It lands on the long-lived
+# `dev` prerelease so that GitHub's `releases/latest` keeps pointing at the
+# stable channel (releases/latest ignores prereleases and drafts).
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dev-build
+  cancel-in-progress: true
+
+jobs:
+  dev:
+    name: Build and publish dev channel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Configure Android SDK
+        run: |
+          set -euo pipefail
+          ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+          if ! command -v sdkmanager >/dev/null 2>&1; then
+            echo "sdkmanager not found (ANDROID_HOME=$ANDROID_HOME)" >&2
+            exit 1
+          fi
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Compute dev version
+        run: |
+          set -euo pipefail
+          BASE_CODE=$(awk -F= '/^versionCode=/{print $2}' version.properties)
+          BASE_NAME=$(awk -F= '/^versionName=/{print $2}' version.properties)
+          DEV_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/dev/latest-dev.json"
+          PREV_CODE=$(curl -fsSL "$DEV_URL" 2>/dev/null \
+            | python3 -c 'import json,sys;print(json.load(sys.stdin).get("versionCode",0))' \
+            2>/dev/null || echo 0)
+          # Strictly monotonic across both channels: a dev build must outrank the
+          # stable release it is based on, and the next stable release must be
+          # bumped above the last dev build (enforced in release.yml).
+          if [ "$PREV_CODE" -ge "$BASE_CODE" ]; then
+            CODE=$((PREV_CODE + 1))
+          else
+            CODE=$((BASE_CODE + 1))
+          fi
+          NAME="${BASE_NAME}-dev.${GITHUB_RUN_NUMBER}"
+          printf 'versionCode=%s\nversionName=%s\n' "$CODE" "$NAME" > version.properties
+          echo "dev build: ${NAME} (${CODE})"
+
+      - name: Restore signing material
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p keystore
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > keystore/xbot-release.jks
+          {
+            echo "storeFile=keystore/xbot-release.jks"
+            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "keyPassword=$ANDROID_KEY_PASSWORD"
+          } > keystore.properties
+
+      - name: Build, test, lint
+        run: ./gradlew :app:assembleRelease :app:testDebugUnitTest :app:lintDebug --no-daemon
+
+      - name: Generate latest-dev.json
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/app-release.apk
+          VERSION_CODE=$(awk -F= '/^versionCode=/{print $2}' version.properties)
+          VERSION_NAME=$(awk -F= '/^versionName=/{print $2}' version.properties)
+          SIZE=$(stat -c%s "$APK")
+          SHA=$(sha256sum "$APK" | awk '{print $1}')
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/dev/xbot-android-dev-${VERSION_CODE}.apk"
+          python3 - "$SIZE" "$SHA" "$VERSION_CODE" "$VERSION_NAME" "$URL" "$GITHUB_SHA" \
+            "dev" > latest-dev.json <<'PY'
+          import datetime
+          import json
+          import os
+          import re
+          import sys
+
+          size, sha, code, name, url, commit, channel = sys.argv[1:8]
+
+          changelog = ""
+          if os.path.exists("CHANGELOG.md"):
+              text = open("CHANGELOG.md", encoding="utf-8").read()
+              # Dev builds carry a "-dev.N" suffix; match the base version line.
+              base = re.sub(r"-dev\.\d+$", "", name)
+              match = re.search(
+                  r"^## \[%s\][^\n]*\n(.*?)(?=^## \[|\Z)" % re.escape(base),
+                  text,
+                  re.M | re.S,
+              )
+              if match:
+                  changelog = match.group(1).strip()
+          if not changelog:
+              changelog = "开发版构建 %s" % name
+
+          print(json.dumps({
+              "schema": 2,
+              "channel": channel,
+              "versionCode": int(code),
+              "versionName": name,
+              "minSdk": 26,
+              "size": int(size),
+              "sha256": sha,
+              "url": url,
+              "changelog": changelog,
+              "mandatory": False,
+              "publishedAt": datetime.datetime.now(datetime.timezone.utc).strftime(
+                  "%Y-%m-%dT%H:%M:%SZ"
+              ),
+              "commit": commit[:7],
+          }, ensure_ascii=False, indent=2))
+          PY
+          cat latest-dev.json
+
+      - name: Publish to the dev release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION_CODE=$(awk -F= '/^versionCode=/{print $2}' version.properties)
+          VERSION_NAME=$(awk -F= '/^versionName=/{print $2}' version.properties)
+          APK="xbot-android-dev-${VERSION_CODE}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$APK"
+          if gh release view dev >/dev/null 2>&1; then
+            # Drop the previous APK so the release page keeps exactly one build.
+            # `|| true` is required: with `set -o pipefail`, an empty asset list
+            # makes grep exit 1 and would abort the whole step.
+            gh release view dev --json assets --jq '.assets[].name' \
+              | grep -E '^xbot-android-dev-.*\.apk$' \
+              | while read -r old; do
+                  gh release delete-asset dev "$old" --yes || true
+                done || true
+            gh release upload dev "$APK" latest-dev.json --clobber
+            gh release edit dev \
+              --notes "master 自动构建的开发版通道。最新版本 ${VERSION_NAME} (${VERSION_CODE})，清单见 latest-dev.json。"
+          else
+            gh release create dev \
+              --prerelease \
+              --title "开发版 · dev channel" \
+              --notes "master 自动构建的开发版通道。最新版本 ${VERSION_NAME} (${VERSION_CODE})，清单见 latest-dev.json。" \
+              "$APK" latest-dev.json
+          fi
