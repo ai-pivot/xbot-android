@@ -2,6 +2,7 @@ package dev.xbot.android.sessions
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -36,6 +38,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -56,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.xbot.android.data.UserChat
+import dev.xbot.android.ui.components.shortenPath
 import dev.xbot.android.ui.components.PathText
 import dev.xbot.android.update.UpdateViewModel
 import java.time.Instant
@@ -76,6 +82,7 @@ fun SessionsScreen(
     var deleteTarget by remember { mutableStateOf<UserChat?>(null) }
     var forkTarget by remember { mutableStateOf<UserChat?>(null) }
     var createLabel by remember { mutableStateOf("") }
+    var createWorkDir by remember { mutableStateOf("") }
     var renameLabel by remember { mutableStateOf("") }
     var forkLabel by remember { mutableStateOf("") }
 
@@ -94,7 +101,16 @@ fun SessionsScreen(
         }
     }
 
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(state.notice) {
+        state.notice?.let {
+            snackbar.showSnackbar(it)
+            vm.consumeNotice()
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = {
@@ -315,21 +331,55 @@ fun SessionsScreen(
             onDismissRequest = { showCreate = false },
             title = { Text("新建会话") },
             text = {
-                OutlinedTextField(
-                    value = createLabel,
-                    onValueChange = { createLabel = it },
-                    label = { Text("会话名称（可选）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = createLabel,
+                        onValueChange = { createLabel = it },
+                        label = { Text("会话名称（可选）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = createWorkDir,
+                        onValueChange = { createWorkDir = it },
+                        label = { Text("工作目录（可选）") },
+                        placeholder = { Text("默认：服务器工作目录") },
+                        supportingText = { Text("服务器上的绝对路径，例如 /home/cjw/project") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (state.workDirSuggestions.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            state.workDirSuggestions.forEach { dir ->
+                                SuggestionChip(
+                                    onClick = { createWorkDir = dir },
+                                    label = {
+                                        Text(
+                                            shortenPath(dir),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1,
+                                        )
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         showCreate = false
                         val label = createLabel
+                        val workDir = createWorkDir
                         createLabel = ""
-                        vm.createChat(label) { chatId ->
+                        createWorkDir = ""
+                        vm.createChat(label, workDir) { chatId ->
                             val created = UserChat(
                                 chatId = chatId,
                                 channel = "web",

@@ -10,6 +10,8 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 
 /**
  * Tiny encrypted-at-rest store for the login credentials.
@@ -114,6 +116,33 @@ class AppPrefs(context: Context) {
         get() = prefs.getLong(KEY_UPDATE_CHECK_AT, 0L)
         set(value) = prefs.edit().putLong(KEY_UPDATE_CHECK_AT, value).apply()
 
+    /**
+     * 最近用过的工作目录（新建会话弹窗的快捷选项），最新在前，最多 [MAX_RECENT_WORK_DIRS] 个。
+     * 纯本地状态：服务端没有「最近目录」接口，Web 端也是存 localStorage。
+     */
+    var recentWorkDirs: List<String>
+        get() {
+            val raw = prefs.getString(KEY_RECENT_WORK_DIRS, "").orEmpty()
+            if (raw.isBlank()) return emptyList()
+            return runCatching {
+                XbotJson.decodeFromString<List<String>>(raw)
+            }.getOrDefault(emptyList()).filter { it.isNotBlank() }
+        }
+        set(value) {
+            prefs.edit()
+                .putString(KEY_RECENT_WORK_DIRS, XbotJson.encodeToString(value.take(MAX_RECENT_WORK_DIRS)))
+                .apply()
+        }
+
+    /** 记住一个工作目录（去重、置顶、截断），返回更新后的列表。 */
+    fun rememberWorkDir(dir: String): List<String> {
+        val path = dir.trim()
+        if (path.isEmpty()) return recentWorkDirs
+        val next = (listOf(path) + recentWorkDirs.filterNot { it == path }).take(MAX_RECENT_WORK_DIRS)
+        recentWorkDirs = next
+        return next
+    }
+
     fun lastSeq(chatId: String): Long =
         if (chatId.isBlank()) 0L else prefs.getLong("$KEY_SEQ_PREFIX$chatId", 0L)
 
@@ -141,6 +170,8 @@ class AppPrefs(context: Context) {
         const val KEY_UPDATE_URL = "update_manifest_url"
         const val KEY_UPDATE_CHECK_AT = "update_last_check_at"
         const val KEY_MEDIA_URL = "media_base_url"
+        const val KEY_RECENT_WORK_DIRS = "recent_work_dirs"
+        const val MAX_RECENT_WORK_DIRS = 5
     }
 }
 

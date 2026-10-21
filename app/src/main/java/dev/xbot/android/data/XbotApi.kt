@@ -104,6 +104,28 @@ class XbotApi(private val prefs: AppPrefs) {
         return decodeEnvelope<CreateChatResponse>(execute(post("/api/chats/create", body))).chatId
     }
 
+    /**
+     * 设置会话的工作目录。
+     *
+     * `force = true` 表示这是**显式用户动作**（新建会话弹窗 / 会话信息里改路径），
+     * 服务端会原样采用传入路径，不会被既有 cwd 或自动推断值顶掉
+     * （见服务端 `rpc_table.go` 的 set_cwd 与 web 端 `setCwd`）。
+     *
+     * 注意：`POST /api/chats/create` 没有 work_dir 参数，所以只能在建完会话后设置；
+     * 这一步失败不代表会话创建失败。
+     */
+    suspend fun setCwd(chatId: String, dir: String, channel: String = "web") {
+        rpc(
+            "set_cwd",
+            buildJsonObject {
+                put("channel", channel)
+                put("chat_id", chatId)
+                put("dir", dir)
+                put("force", true)
+            },
+        )
+    }
+
     suspend fun switchChat(chatId: String, channel: String = "web") {
         val url = urlBuilder("/api/chats/${encodePath(chatId)}/switch")
             .addQueryParameter("channel", channel)

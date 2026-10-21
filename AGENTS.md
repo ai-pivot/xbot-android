@@ -35,6 +35,11 @@ iteration 按序号合并，checkpoint 替换 / delta 追加，收到 turn 结�
 - **本机默认没有可用的 Android SDK**：直接 `./gradlew` 会报 `SDK location not found`。仓库里只有
   `tools/sdk/cmdline-tools`（`tools/` 整体 gitignored），先装平台再写 `local.properties`：
   `tools/sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$PWD/tools/sdk "platforms;android-35" "build-tools;35.0.0"`
+- **在 worktree 里第一次 `assembleRelease` 会失败**：`keystore.properties` / `keystore/` 是 gitignored，
+  新 worktree 里没有，报 `SigningConfig "release" is missing required property "storeFile"`。
+  从主仓库 `cp keystore.properties . && mkdir -p keystore && cp ../xbot-android/keystore/xbot-release.jks keystore/`
+  即可（同样是 gitignored，不会被提交）。另外 `aapt2`/`apksigner` 在 worktree 里没有 `tools/sdk`，
+  要用主仓库的绝对路径 `/home/cjw/xbot-android/tools/sdk/build-tools/35.0.0/`。
 - **`tools/` `dist/` `keystore.properties` `keystore/` `local.properties` 全部 gitignored**，不要在这些目录里找源码或提交它们。
 - **Compose 里 `TopAppBar` 的 title 只拿「剩余宽度」**（先量 navigationIcon、再量 actions）。
   往 `actions` 里塞长文本会把标题挤成单字。详见 `docs/agent/ui.md`。
@@ -49,6 +54,7 @@ iteration 按序号合并，checkpoint 替换 / delta 追加，收到 turn 结�
 
 ## 知识文件
 
+- `docs/agent/sessions.md` — 新建会话与工作目录（create 不收 work_dir，建完走 set_cwd(force)）
 - `docs/agent/chat.md` — 历史装载的两条路径（替换 vs 合并）、Rewind 后为什么必须整体重载
 - `docs/agent/ui.md` — Compose 界面约定、TopAppBar 布局陷阱、聊天页结构
 - `docs/agent/ui-composer.md` — 输入区高度（为什么必须 `BasicTextField`）、上下文预算指示器的数据来源与三种口径

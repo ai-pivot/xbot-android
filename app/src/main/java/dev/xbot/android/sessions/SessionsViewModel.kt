@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dev.xbot.android.XbotApp
 import dev.xbot.android.data.UnauthorizedException
 import dev.xbot.android.data.UserChat
+import dev.xbot.android.data.workDirSuggestions
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,12 +23,17 @@ data class SessionsUiState(
     val error: String? = null,
     val authenticated: Boolean = true,
     val serverUrl: String = "",
+    /** 一次性提示（snackbar 用），读完即清。 */
+    val notice: String? = null,
+    /** 新建会话弹窗的工作目录候选（最近用过 + 现有会话），由 VM 算好给 UI 渲染。 */
+    val workDirSuggestions: List<String> = emptyList(),
 )
 
 class SessionsViewModel(app: Application) : AndroidViewModel(app) {
 
     private val container = (app as XbotApp).container
     private val api = container.api
+    private val prefs = container.prefs
 
     private val _state = MutableStateFlow(
         SessionsUiState(serverUrl = api.baseUrl()),
@@ -70,6 +76,7 @@ class SessionsViewModel(app: Application) : AndroidViewModel(app) {
                         sessions = tree.sessions,
                         error = null,
                         authenticated = true,
+                        workDirSuggestions = workDirSuggestions(prefs.recentWorkDirs, tree.sessions),
                     )
                 }
             } catch (e: UnauthorizedException) {
@@ -93,16 +100,37 @@ class SessionsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun createChat(label: String, onCreated: (String) -> Unit) {
+    fun consumeNotice() {
+        _state.update { it.copy(notice = null) }
+    }
+
+    /**
+     * 新建会话，可选指定工作目录。
+     *
+     * 服务端 `POST /api/chats/create` 不接受 work_dir，只能在会话建好之后调 RPC `set_cwd`
+     * （force=true，Web 端同样是这个流程）。因此**目录设置失败不等于创建失败**：
+     * 会话照常返回，只弹一条提示，用户在会话信息里还能再改。
+     */
+    fun createChat(label: String, workDir: String = "", onCreated: (String) -> Unit) {
+        val dir = workDir.trim()
         viewModelScope.launch {
-            runCatching { withAuthRetry { api.createChat(label) } }
-                .onSuccess { chatId ->
-                    refresh(showLoading = false)
-                    onCreated(chatId)
-                }
+            val created = runCatching { withAuthRetry { api.createChat(label) } }
                 .onFailure { e ->
                     _state.update { it.copy(error = e.message ?: "创建会话失败") }
                 }
+            val chatId = created.getOrNull() ?: return@launch
+
+            if (dir.isNotEmpty()) {
+                runCatching { withAuthRetry { api.setCwd(chatId, dir) } }
+                    .onSuccess { prefs.rememberWorkDir(dir) }
+                    .onFailure { e ->
+                        _state.update {
+                            it.copy(notice = "会话已创建，但工作目录设置失败：${e.message ?: "未知错误"}")
+                        }
+                    }
+            }
+            refresh(showLoading = false)
+            onCreated(chatId)
         }
     }
 
