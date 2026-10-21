@@ -5,7 +5,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.xbot.android.XbotApp
 import dev.xbot.android.data.UnauthorizedException
+import dev.xbot.android.data.FsEntry
 import dev.xbot.android.data.UserChat
+import dev.xbot.android.data.parentPath
+import dev.xbot.android.data.workDirSuggestions
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +18,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+/** 新建会话弹窗里的目录浏览状态（服务端 /api/fs/list）。 */
+data class DirBrowserUi(
+    val path: String = "/",
+    val dirs: List<FsEntry> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+)
+
 data class SessionsUiState(
     val loading: Boolean = true,
     val refreshing: Boolean = false,
@@ -22,12 +33,19 @@ data class SessionsUiState(
     val error: String? = null,
     val authenticated: Boolean = true,
     val serverUrl: String = "",
+    /** 一次性提示（snackbar 用），读完即清。 */
+    val notice: String? = null,
+    /** 新建会话弹窗的工作目录候选（最近用过 + 现有会话），由 VM 算好给 UI 渲染。 */
+    val workDirSuggestions: List<String> = emptyList(),
+    /** 非 null 表示目录浏览对话框打开中。 */
+    val browser: DirBrowserUi? = null,
 )
 
 class SessionsViewModel(app: Application) : AndroidViewModel(app) {
 
     private val container = (app as XbotApp).container
     private val api = container.api
+    private val prefs = container.prefs
 
     private val _state = MutableStateFlow(
         SessionsUiState(serverUrl = api.baseUrl()),
@@ -70,6 +88,7 @@ class SessionsViewModel(app: Application) : AndroidViewModel(app) {
                         sessions = tree.sessions,
                         error = null,
                         authenticated = true,
+                        workDirSuggestions = workDirSuggestions(prefs.recentWorkDirs, tree.sessions),
                     )
                 }
             } catch (e: UnauthorizedException) {
@@ -93,16 +112,92 @@ class SessionsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun createChat(label: String, onCreated: (String) -> Unit) {
+    /**
+     * 打开目录浏览：从 [startPath]（空则用最近用过的目录，再退回 `/`）开始逐级浏览。
+     * 工作目录在服务器上，只能用服务端 `/api/fs/list` 列目。
+     */
+    fun openDirBrowser(startPath: String = "") {
+        val start = startPath.trim().ifBlank {
+            _state.value.workDirSuggestions.firstOrNull().orEmpty().ifBlank { "/" }
+        }
+        _state.update { it.copy(browser = DirBrowserUi(path = start, loading = true)) }
+        loadDirs(start)
+    }
+
+    fun browseDir(path: String) {
+        if (path.isBlank()) return
+        _state.update { it.copy(browser = (it.browser ?: DirBrowserUi()).copy(path = path, loading = true, error = null)) }
+        loadDirs(path)
+    }
+
+    fun browseUp() {
+        val current = _state.value.browser ?: return
+        browseDir(parentPath(current.path))
+    }
+
+    fun closeDirBrowser() {
+        _state.update { it.copy(browser = null) }
+    }
+
+    private fun loadDirs(path: String) {
         viewModelScope.launch {
-            runCatching { withAuthRetry { api.createChat(label) } }
-                .onSuccess { chatId ->
-                    refresh(showLoading = false)
-                    onCreated(chatId)
+            runCatching { withAuthRetry { api.listDir(path) } }
+                .onSuccess { entries ->
+                    _state.update { current ->
+                        val browser = current.browser ?: return@update current
+                        // 只接受仍然指向同一路径的结果，避免快速连点时的错序覆盖
+                        if (browser.path != path) current else current.copy(
+                            browser = browser.copy(
+                                dirs = entries.filter { it.isDir && it.name.isNotEmpty() }
+                                    .sortedBy { it.name.lowercase() },
+                                loading = false,
+                                error = null,
+                            ),
+                        )
+                    }
                 }
+                .onFailure { e ->
+                    _state.update { current ->
+                        val browser = current.browser ?: return@update current
+                        if (browser.path != path) current else current.copy(
+                            browser = browser.copy(loading = false, error = e.message ?: "无法读取该目录"),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun consumeNotice() {
+        _state.update { it.copy(notice = null) }
+    }
+
+    /**
+     * 新建会话，可选指定工作目录。
+     *
+     * 服务端 `POST /api/chats/create` 不接受 work_dir，只能在会话建好之后调 RPC `set_cwd`
+     * （force=true，Web 端同样是这个流程）。因此**目录设置失败不等于创建失败**：
+     * 会话照常返回，只弹一条提示，用户在会话信息里还能再改。
+     */
+    fun createChat(label: String, workDir: String = "", onCreated: (String) -> Unit) {
+        val dir = workDir.trim()
+        viewModelScope.launch {
+            val created = runCatching { withAuthRetry { api.createChat(label) } }
                 .onFailure { e ->
                     _state.update { it.copy(error = e.message ?: "创建会话失败") }
                 }
+            val chatId = created.getOrNull() ?: return@launch
+
+            if (dir.isNotEmpty()) {
+                runCatching { withAuthRetry { api.setCwd(chatId, dir) } }
+                    .onSuccess { prefs.rememberWorkDir(dir) }
+                    .onFailure { e ->
+                        _state.update {
+                            it.copy(notice = "会话已创建，但工作目录设置失败：${e.message ?: "未知错误"}")
+                        }
+                    }
+            }
+            refresh(showLoading = false)
+            onCreated(chatId)
         }
     }
 

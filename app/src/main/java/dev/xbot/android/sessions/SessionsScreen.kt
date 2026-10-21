@@ -2,6 +2,7 @@ package dev.xbot.android.sessions
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,10 +16,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -36,6 +40,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -56,6 +63,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.xbot.android.data.UserChat
+import dev.xbot.android.data.joinPath
+import dev.xbot.android.ui.components.shortenPath
 import dev.xbot.android.ui.components.PathText
 import dev.xbot.android.update.UpdateViewModel
 import java.time.Instant
@@ -76,6 +85,7 @@ fun SessionsScreen(
     var deleteTarget by remember { mutableStateOf<UserChat?>(null) }
     var forkTarget by remember { mutableStateOf<UserChat?>(null) }
     var createLabel by remember { mutableStateOf("") }
+    var createWorkDir by remember { mutableStateOf("") }
     var renameLabel by remember { mutableStateOf("") }
     var forkLabel by remember { mutableStateOf("") }
 
@@ -94,7 +104,16 @@ fun SessionsScreen(
         }
     }
 
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(state.notice) {
+        state.notice?.let {
+            snackbar.showSnackbar(it)
+            vm.consumeNotice()
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = {
@@ -315,21 +334,63 @@ fun SessionsScreen(
             onDismissRequest = { showCreate = false },
             title = { Text("新建会话") },
             text = {
-                OutlinedTextField(
-                    value = createLabel,
-                    onValueChange = { createLabel = it },
-                    label = { Text("会话名称（可选）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = createLabel,
+                        onValueChange = { createLabel = it },
+                        label = { Text("会话名称（可选）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = createWorkDir,
+                        onValueChange = { createWorkDir = it },
+                        label = { Text("工作目录（可选）") },
+                        placeholder = { Text("默认：服务器工作目录") },
+                        supportingText = { Text("服务器上的绝对路径，例如 /home/cjw/project") },
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = { vm.openDirBrowser(createWorkDir) }) {
+                                Icon(
+                                    Icons.Outlined.FolderOpen,
+                                    contentDescription = "浏览服务器目录",
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (state.workDirSuggestions.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            state.workDirSuggestions.forEach { dir ->
+                                SuggestionChip(
+                                    onClick = { createWorkDir = dir },
+                                    label = {
+                                        Text(
+                                            shortenPath(dir),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1,
+                                        )
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         showCreate = false
                         val label = createLabel
+                        val workDir = createWorkDir
                         createLabel = ""
-                        vm.createChat(label) { chatId ->
+                        createWorkDir = ""
+                        vm.createChat(label, workDir) { chatId ->
                             val created = UserChat(
                                 chatId = chatId,
                                 channel = "web",
@@ -342,6 +403,93 @@ fun SessionsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showCreate = false }) { Text("取消") }
+            },
+        )
+    }
+
+    state.browser?.let { browser ->
+        AlertDialog(
+            onDismissRequest = { vm.closeDirBrowser() },
+            title = { Text("选择工作目录") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { vm.browseUp() },
+                            enabled = browser.path != "/" && !browser.loading,
+                        ) {
+                            Icon(Icons.Filled.ArrowUpward, contentDescription = "上一级")
+                        }
+                        Text(
+                            text = browser.path,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    when {
+                        browser.loading -> Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                        }
+
+                        browser.error != null -> Text(
+                            text = browser.error.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+
+                        browser.dirs.isEmpty() -> Text(
+                            text = "这个目录下没有子目录",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+
+                        else -> LazyColumn(modifier = Modifier.height(240.dp)) {
+                            items(browser.dirs, key = { it.name }) { entry ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { vm.browseDir(joinPath(browser.path, entry.name)) }
+                                        .padding(vertical = 10.dp, horizontal = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.FolderOpen,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        entry.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        createWorkDir = browser.path
+                        vm.closeDirBrowser()
+                    },
+                    enabled = !browser.loading && browser.error == null,
+                ) { Text("使用此目录") }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.closeDirBrowser() }) { Text("取消") }
             },
         )
     }
