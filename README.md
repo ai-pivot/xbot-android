@@ -124,15 +124,37 @@ cp keystore.properties.example keystore.properties
 # then fill in storePassword / keyPassword
 ```
 
-The in-app update manifest URL is configured in **Settings → 更新**; no host is
-hard-coded in the source. Publishing a release requires the environment variables:
+## Releases and update channels
+
+Both channels publish the same signed APK plus a JSON manifest; the app only
+compares `versionCode` and verifies `sha256` + the signer certificate, so it can
+switch channels in place without losing data.
+
+| Channel | Manifest URL | Produced by |
+|---|---|---|
+| stable | `https://github.com/ai-pivot/xbot-android/releases/latest/download/latest.json` | pushing a `v*` tag (`release.yml`) |
+| dev | `https://github.com/ai-pivot/xbot-android/releases/download/dev/latest-dev.json` | every push to `master` (`dev.yml`, lands on the `dev` prerelease) |
+
+Pick one in **Settings → 更新 → 更新清单地址** (nothing is hard-coded in the source),
+then tap **检查更新** once to persist it; afterwards the app re-checks every 6 hours.
+
+Releasing a stable version:
 
 ```bash
-XBOT_UPDATE_BASE=https://your-host/xbot/android \
-XBOT_MC_TARGET=your-mc-alias/bucket/path \
-CHANGELOG="..." \
-./scripts/release-android.sh
+# 1. bump version.properties (versionCode must exceed the newest dev build —
+#    release.yml fails with the exact number to use if it does not)
+# 2. commit, merge to master
+git tag v0.3.3 && git push origin v0.3.3
 ```
+
+`dev.yml` numbers dev builds as `max(stable, previous dev) + 1`, so a later stable
+release always outranks every dev build — switching a device from `dev` back to
+`stable` is a normal upgrade, not a reinstall. A manifest *older* than the install
+cannot be installed by Android; the update card says so instead of showing
+"已是最新".
+
+Update notes come from `CHANGELOG.md`: the workflow extracts only the
+`## [x.y.z]` section matching the release.
 
 ## License
 
