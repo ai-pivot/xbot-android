@@ -5,6 +5,7 @@ import dev.xbot.android.data.HistoryIteration
 import dev.xbot.android.data.HistoryMessage
 import dev.xbot.android.data.HistoryResponse
 import dev.xbot.android.data.ProgressEvent
+import dev.xbot.android.data.SessionStatusResponse
 import dev.xbot.android.data.TokenUsage
 import dev.xbot.android.data.ToolProgress
 import dev.xbot.android.data.WsMessage
@@ -25,6 +26,15 @@ object ChatReducer {
 
     fun empty(chatId: String, channel: String, title: String = ""): ChatUiState =
         ChatUiState(chatId = chatId, channel = channel, title = title, loading = true)
+
+    /**
+     * 应用 `/api/session/status`：工作目录 + 上下文预算一次带回来。
+     * cwd 为空时保留原值（老服务端可能不返回）。
+     */
+    fun withSessionStatus(state: ChatUiState, status: SessionStatusResponse): ChatUiState {
+        val next = if (status.cwd.isNotBlank()) state.copy(cwd = status.cwd) else state
+        return withContextBudget(next, status.tokenUsage)
+    }
 
     /**
      * 应用 `/api/session/status` 返回的 `token_usage`。
@@ -206,8 +216,9 @@ object ChatReducer {
 
     fun applyProgress(state: ChatUiState, progress: ProgressEvent): ChatUiState {
         var next = state
-        // 回合进行中的 token 用量先落到预算指示器上，再处理 turn/iteration。
+        // 回合进行中的 token 用量 / cwd 先落到界面上，再处理 turn/iteration。
         progress.tokenUsage?.let { usage -> next = next.withLiveTokenUsage(usage) }
+        if (progress.cwd.isNotBlank()) next = next.copy(cwd = progress.cwd)
         var turnId = progress.turnId.takeIf { it > 0L } ?: state.liveTurnId
 
         progress.turnStart?.let { start ->

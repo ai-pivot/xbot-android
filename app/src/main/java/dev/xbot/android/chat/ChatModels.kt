@@ -64,6 +64,8 @@ data class ChatUiState(
     val chatId: String = "",
     val channel: String = "web",
     val title: String = "",
+    /** 该会话的工作目录（服务端 work_dir / session status 的 cwd）。 */
+    val cwd: String = "",
     val loading: Boolean = false,
     val error: String? = null,
     val connected: Boolean = false,

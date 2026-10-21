@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -56,6 +57,7 @@ fun Composer(
     onCancel: () -> Unit,
     sending: Boolean = false,
     contextBudget: ContextBudgetUi? = null,
+    cwd: String = "",
 ) {
     var showBudget by remember { mutableStateOf(false) }
 
@@ -100,11 +102,32 @@ fun Composer(
                     )
                 }
             }
-            ContextBudgetLabel(
-                budget = contextBudget,
-                onClick = { showBudget = true },
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-            )
+            // 工作目录与上下文占用同处一行、整体居中：两者都没有时这一行不存在。
+            if (cwd.isNotBlank() || contextBudget != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PathText(
+                        path = cwd,
+                        modifier = Modifier.widthIn(max = 150.dp),
+                    )
+                    if (cwd.isNotBlank() && contextBudget != null) {
+                        Text(
+                            text = " · ",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                    ContextBudgetLabel(
+                        budget = contextBudget,
+                        onClick = { showBudget = true },
+                    )
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,

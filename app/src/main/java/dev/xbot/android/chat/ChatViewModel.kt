@@ -87,7 +87,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             runCatching {
                 withAuthRetry { api.sessionStatus(chatId, channel) }
             }.onSuccess { status ->
-                _state.update { ChatReducer.withContextBudget(it, status.tokenUsage) }
+                _state.update { ChatReducer.withSessionStatus(it, status) }
             }
         }
     }

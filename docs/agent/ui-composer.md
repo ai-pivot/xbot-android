@@ -49,3 +49,15 @@ Material3 的 `OutlinedTextField` / `TextField` 在**装饰盒内部**写死了 
   按 `formatTokens` 压缩成 K/M；上限未知时右半显示 `—`。
 - 文字可点：弹出「上下文预算」对话框，显示已用输入 / 上限 / 占用 / 模型。
   没有数据时（`contextBudget == null`）**整行都不存在**，输入区高度与宽度都不会跳。
+
+## 工作目录（cwd）从哪来、显示在哪
+
+- **会话列表**：直接用聊天列表项里的 `UserChat.workDir`（服务端 `work_dir`，`omitempty`，可能为空），
+  显示在会话项的时间行左侧，`Modifier.weight(1f, fill = false)` + 省略号，路径不换行、不撑高卡片。
+- **聊天页**：`ChatUiState.cwd`，与上下文占用同一行、整体居中。
+  - 来源一：`/api/session/status` 的 `cwd`（`ChatReducer.withSessionStatus`，空值保留旧值）；
+  - 来源二：progress 事件里的 `cwd`（回合进行中可能变，`applyProgress` 直接覆盖）。
+- 两处都用 `ui/components/PathText.kt`：`Icons.Outlined.Folder` 11dp + `shortenPath()`。
+  `shortenPath` 把 `^/(home|Users|root)/<user>/` 换成 `~/`，段数超过 `keepSegments + 1` 时只留最后两段
+  并加 `…/` 前缀 —— 路径尾巴比开头有用，右截断（Compose 的默认 Ellipsis）会把最关键的目录名切掉。
+

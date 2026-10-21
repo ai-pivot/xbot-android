@@ -5,6 +5,7 @@ import dev.xbot.android.data.HistoryMessage
 import dev.xbot.android.data.HistoryResponse
 import dev.xbot.android.data.ProgressEvent
 import dev.xbot.android.data.SessionEvent
+import dev.xbot.android.data.SessionStatusResponse
 import dev.xbot.android.data.TokenUsage
 import dev.xbot.android.data.WsMessage
 import org.junit.Assert.assertEquals
@@ -457,5 +458,44 @@ class ChatReducerTest {
         )
 
         assertNull(state.contextBudget)
+    }
+
+    @Test
+    fun `session status stores the working directory and the budget`() {
+        val state = ChatReducer.withSessionStatus(
+            ChatReducer.empty("chat_1", "web"),
+            SessionStatusResponse(
+                cwd = "/home/cjw/xbot-android",
+                tokenUsage = TokenUsage(
+                    available = true,
+                    promptTokens = 20_000,
+                    maxContextTokens = 200_000,
+                ),
+            ),
+        )
+
+        assertEquals("/home/cjw/xbot-android", state.cwd)
+        assertEquals(0.1f, state.contextBudget!!.percent, 0.001f)
+    }
+
+    @Test
+    fun `blank cwd from the server keeps the previous working directory`() {
+        val state = ChatReducer.withSessionStatus(
+            ChatReducer.empty("chat_1", "web").copy(cwd = "/keep/me"),
+            SessionStatusResponse(cwd = "", tokenUsage = null),
+        )
+
+        assertEquals("/keep/me", state.cwd)
+        assertNull(state.contextBudget)
+    }
+
+    @Test
+    fun `progress carries the working directory`() {
+        val state = ChatReducer.applyProgress(
+            ChatReducer.empty("chat_1", "web"),
+            ProgressEvent(turnId = 1, iteration = 1, phase = "running", cwd = "/tmp/work"),
+        )
+
+        assertEquals("/tmp/work", state.cwd)
     }
 }
