@@ -125,7 +125,7 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val manifest = withContext(Dispatchers.IO) {
                     val request = Request.Builder()
-                        .url(manifestUrl)
+                        .url(url)
                         .header("Cache-Control", "no-cache")
                         .get()
                         .build()
