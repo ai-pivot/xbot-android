@@ -48,7 +48,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         reload()
     }
 
-    fun reload() {
+    /**
+     * Reload the newest page of history.
+     *
+     * [replaceTurns] must be true whenever the server may have **removed** turns
+     * (rewind, or any truncation): merging keeps turns that no longer exist
+     * server-side, which is exactly why a rewound message used to stay on screen
+     * until the chat was reopened. Normal reloads keep the merge so pages loaded
+     * by scrolling up are not thrown away.
+     */
+    fun reload(replaceTurns: Boolean = false) {
         if (chatId.isBlank() || reloading) return
         reloading = true
         loadJob?.cancel()
@@ -58,7 +67,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     api.history(chatId, channel, historyLimit, 0)
                 }
                 _state.update { current ->
-                    if (current.turns.isNotEmpty() && current.oldestId > 0L) {
+                    if (!replaceTurns && current.turns.isNotEmpty() && current.oldestId > 0L) {
                         ChatReducer.mergeLatestHistory(current, response)
                     } else {
                         ChatReducer.withHistory(current, response)
@@ -200,7 +209,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun acknowledgeReload() {
-        _state.update { it.copy(needsReload = false) }
+        _state.update { it.copy(needsReload = false, reloadReplacesHistory = false) }
     }
 
     private fun startStream() {
@@ -214,8 +223,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 // 这时刷新一次上下文预算，指示器才不会停在回合中途的估值上。
                 if (wasBusy && !_state.value.busy) refreshContextBudget()
                 if (_state.value.needsReload) {
+                    val replace = _state.value.reloadReplacesHistory
                     acknowledgeReload()
-                    reload()
+                    reload(replaceTurns = replace)
                 }
             }
         }

@@ -653,7 +653,8 @@ fun ChatScreen(
                         app.container.api.rewindHistory(chatId, channel, historyId)
                     }.onSuccess { response ->
                         if (response.draft.isNotBlank()) input = response.draft
-                        vm.reload()
+                        // 回退是「删掉」历史，必须整体替换，合并会把已回退的 turn 留在屏幕上。
+                        vm.reload(replaceTurns = true)
                         snackbar.showSnackbar(rewindMessage(response))
                     }.onFailure {
                         snackbar.showSnackbar(it.message ?: "回退失败")

@@ -81,6 +81,8 @@ data class ChatUiState(
     val loadingMore: Boolean = false,
     val loadMoreError: String? = null,
     val needsReload: Boolean = false,
+    /** needsReload 的语义补充：历史被截断（回退），重载必须整体替换而不是合并。 */
+    val reloadReplacesHistory: Boolean = false,
     val pendingUserText: String? = null,
     /** null = 服务端还没有真实 token 数据（新会话 / 未发起过 LLM 调用）。 */
     val contextBudget: ContextBudgetUi? = null,

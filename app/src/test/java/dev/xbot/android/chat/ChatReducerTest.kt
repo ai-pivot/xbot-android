@@ -498,4 +498,71 @@ class ChatReducerTest {
 
         assertEquals("/tmp/work", state.cwd)
     }
+
+    @Test
+    fun `history rewound session event asks for a replacing reload`() {
+        val state = ChatReducer.applyEvent(
+            ChatReducer.empty("chat_1", "web"),
+            WsMessage(
+                type = "session",
+                session = SessionEvent(action = "history_rewound", chatId = "chat_1"),
+            ),
+        )
+
+        assertTrue(state.needsReload)
+        assertTrue(state.reloadReplacesHistory)
+    }
+
+    @Test
+    fun `applying a fresh history clears the replacing-reload flag`() {
+        val state = ChatReducer.withHistory(
+            ChatReducer.empty("chat_1", "web").copy(
+                needsReload = true,
+                reloadReplacesHistory = true,
+            ),
+            HistoryResponse(ok = true, messages = emptyList()),
+        )
+
+        assertFalse(state.needsReload)
+        assertFalse(state.reloadReplacesHistory)
+    }
+
+    @Test
+    fun `replace reload drops turns the server no longer returns`() {
+        // 回退后服务端只剩 turn 1；合并式重载会保留 turn 2（旧 bug），整体替换才清掉。
+        val before = ChatReducer.withHistory(
+            ChatReducer.empty("chat_1", "web"),
+            HistoryResponse(
+                ok = true,
+                messages = listOf(
+                    HistoryMessage(id = 1, role = "user", content = "keep me", turnId = 1),
+                    HistoryMessage(id = 2, role = "user", content = "rewound", turnId = 2),
+                ),
+            ),
+        )
+        assertEquals(2, before.turns.size)
+
+        val replaced = ChatReducer.withHistory(
+            before,
+            HistoryResponse(
+                ok = true,
+                messages = listOf(
+                    HistoryMessage(id = 1, role = "user", content = "keep me", turnId = 1),
+                ),
+            ),
+        )
+        assertEquals(listOf(1L), replaced.turns.map { it.turnId })
+
+        // 同一份响应走合并路径时旧 turn 会留下 —— 这正是之前必须退出会话才生效的原因。
+        val merged = ChatReducer.mergeLatestHistory(
+            before,
+            HistoryResponse(
+                ok = true,
+                messages = listOf(
+                    HistoryMessage(id = 1, role = "user", content = "keep me", turnId = 1),
+                ),
+            ),
+        )
+        assertEquals(listOf(1L, 2L), merged.turns.map { it.turnId })
+    }
 }

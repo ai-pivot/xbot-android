@@ -110,6 +110,7 @@ object ChatReducer {
             loadingMore = false,
             loadMoreError = null,
             needsReload = false,
+            reloadReplacesHistory = false,
             pendingUserText = null,
         )
         if (active != null && (active.turnId > 0L || activeRunning)) {
@@ -146,6 +147,7 @@ object ChatReducer {
             loadingMore = false,
             loadMoreError = null,
             needsReload = false,
+            reloadReplacesHistory = false,
             pendingUserText = null,
         )
         if (active != null && (active.turnId > 0L || activeRunning)) {
@@ -380,6 +382,12 @@ object ChatReducer {
                 liveIteration = 0,
             )
             "deleted" -> state.copy(busy = false)
+            // 服务端在历史被截断后广播这个动作（可能是另一端发起的回退）。
+            // 必须标成「整体替换」：合并式重载会把已删除的 turn 留在屏幕上。
+            "history_rewound" -> state.copy(
+                needsReload = true,
+                reloadReplacesHistory = true,
+            )
             else -> state
         }
     }

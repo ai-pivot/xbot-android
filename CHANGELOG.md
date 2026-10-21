@@ -15,6 +15,7 @@
 
 ### 修复
 - Rewind（回退）在服务端其实已成功，客户端却报 `Unexpected symbol 't' in numeric literal at path: $.data.files_rewound`：`history_rewound` / `files_rewound` 是布尔值，模型误声明成整数。
+- 回退成功后聊天页不刷新：`reload()` 一直走「合并」路径，把服务端已删除的 turn 留在屏幕上，必须退出会话重进才消失；现在回退与 `history_rewound` 事件都走整体替换。
 - 回退结果文案区分「历史已截断」与「文件快照是否恢复」，文件没恢复时不再被一句「已回退」掩盖。
 
 ### 变更
