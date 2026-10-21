@@ -103,17 +103,6 @@ class AppPrefs(context: Context) {
         set(value) = prefs.edit().putString(KEY_UPDATE_URL, value.trim()).apply()
 
     /**
-     * Update channel: "stable" (default), "dev" or "custom" (use [updateManifestUrl]).
-     * The channel only selects which manifest is polled; the trust anchor stays the
-     * signer certificate, which is identical for both channels.
-     */
-    var updateChannel: String
-        get() = prefs.getString(KEY_UPDATE_CHANNEL, UpdateManifest.CHANNEL_STABLE)
-            .orEmpty()
-            .ifBlank { UpdateManifest.CHANNEL_STABLE }
-        set(value) = prefs.edit().putString(KEY_UPDATE_CHANNEL, value.trim()).apply()
-
-    /**
      * Public origin used to rewrite localhost/127.0.0.1 image URLs
      * (e.g. https://minio.cjiw.site). Empty disables rewriting.
      */
@@ -150,7 +139,6 @@ class AppPrefs(context: Context) {
         const val KEY_SEQ_PREFIX = "last_seq_"
         const val KEY_COOKIES = "cookies"
         const val KEY_UPDATE_URL = "update_manifest_url"
-        const val KEY_UPDATE_CHANNEL = "update_channel"
         const val KEY_UPDATE_CHECK_AT = "update_last_check_at"
         const val KEY_MEDIA_URL = "media_base_url"
     }

@@ -86,7 +86,7 @@ jobs:
           } > keystore.properties
 
       - name: Build, test, lint
-        run: ./gradlew :app:assembleRelease :app:testDebugUnitTest :app:lintDebug --no-daemon -PdevChannel=true
+        run: ./gradlew :app:assembleRelease :app:testDebugUnitTest :app:lintDebug --no-daemon
 
       - name: Generate latest-dev.json
         run: |
