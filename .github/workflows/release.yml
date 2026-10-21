@@ -84,7 +84,7 @@ jobs:
           if [ -z "$CHANGELOG" ]; then
             CHANGELOG="Release ${VERSION_NAME}"
           fi
-          python3 - "$SIZE" "$SHA" "$VERSION_CODE" "$VERSION_NAME" "$URL" "$CHANGELOG" <<'PY'
+          python3 - "$SIZE" "$SHA" "$VERSION_CODE" "$VERSION_NAME" "$URL" "$CHANGELOG" > latest.json <<'PY'
           import datetime
           import json
           import sys
