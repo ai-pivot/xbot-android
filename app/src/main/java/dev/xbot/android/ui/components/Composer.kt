@@ -103,7 +103,7 @@ fun Composer(
             ContextBudgetLabel(
                 budget = contextBudget,
                 onClick = { showBudget = true },
-                modifier = Modifier.align(Alignment.End),
+                modifier = Modifier.align(Alignment.CenterHorizontally),
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
