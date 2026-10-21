@@ -27,11 +27,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -102,6 +102,14 @@ fun SessionsScreen(
                     }
                 },
                 actions = {
+                    if (state.refreshing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .padding(horizontal = 8.dp)
+                                .size(18.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    }
                     IconButton(onClick = { vm.refresh(showLoading = true) }) {
                         Icon(Icons.Filled.Refresh, contentDescription = "刷新")
                     }
@@ -122,10 +130,6 @@ fun SessionsScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            if (state.refreshing) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
-
             if (updateState.available || updateState.downloading || updateState.readyPath != null) {
                 Card(
                     modifier = Modifier
@@ -232,7 +236,7 @@ fun SessionsScreen(
             when {
                 state.loading && state.sessions.isEmpty() -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        LinearProgressIndicator(modifier = Modifier.padding(32.dp))
+                        CircularProgressIndicator(modifier = Modifier.padding(32.dp))
                     }
                 }
 
