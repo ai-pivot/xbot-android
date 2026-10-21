@@ -56,7 +56,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val response = withAuthRetry {
                     api.history(chatId, channel, historyLimit, 0)
                 }
-                _state.update { ChatReducer.withHistory(it, response) }
+                _state.update { current ->
+                    if (current.turns.isNotEmpty() && current.oldestId > 0L) {
+                        ChatReducer.mergeLatestHistory(current, response)
+                    } else {
+                        ChatReducer.withHistory(current, response)
+                    }
+                }
                 restorePendingAskUser()
             } catch (e: UnauthorizedException) {
                 _state.update { it.copy(loading = false, error = "登录已失效，请重新登录") }
@@ -70,7 +76,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadMore() {
         val current = _state.value
-        if (!current.hasMore || current.oldestId <= 0L || current.loading) return
+        if (!current.hasMore ||
+            current.oldestId <= 0L ||
+            current.loading ||
+            current.loadingMore
+        ) {
+            return
+        }
+        _state.update { it.copy(loadingMore = true, loadMoreError = null) }
         viewModelScope.launch {
             runCatching {
                 withAuthRetry {
@@ -79,10 +92,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }.onSuccess { response ->
                 _state.update { ChatReducer.prependHistory(it, response) }
             }.onFailure { e ->
-                _state.update { it.copy(error = e.message) }
+                _state.update {
+                    it.copy(
+                        loadingMore = false,
+                        loadMoreError = e.message ?: "加载更早的消息失败",
+                    )
+                }
             }
         }
     }
+
+    fun retryLoadMore() = loadMore()
 
     fun send(
         text: String,

@@ -59,6 +59,8 @@ data class ChatUiState(
     val todos: List<TodoItem> = emptyList(),
     val hasMore: Boolean = false,
     val oldestId: Long = 0L,
+    val loadingMore: Boolean = false,
+    val loadMoreError: String? = null,
     val needsReload: Boolean = false,
     val pendingUserText: String? = null,
 ) {

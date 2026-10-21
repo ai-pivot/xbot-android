@@ -40,7 +40,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.xbot.android.data.UserChat
 import dev.xbot.android.update.UpdateViewModel
@@ -79,11 +79,18 @@ fun SessionsScreen(
     var forkLabel by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        vm.start()
         updateVm.autoCheck()
     }
-    DisposableEffect(Unit) {
-        onDispose { vm.stop() }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            vm.start()
+            try {
+                kotlinx.coroutines.awaitCancellation()
+            } finally {
+                vm.stop()
+            }
+        }
     }
 
     Scaffold(

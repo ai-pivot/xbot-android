@@ -58,6 +58,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -86,6 +87,7 @@ import dev.xbot.android.ui.components.ModelPickerSheet
 import dev.xbot.android.ui.components.RewindDialog
 import dev.xbot.android.ui.components.ToolCard
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
@@ -94,6 +96,12 @@ private data class PendingAttachment(
     val name: String,
     val mime: String,
     val size: Long,
+)
+
+private data class PrependAnchor(
+    val turnId: Long,
+    val offset: Int,
+    val requestedOldestId: Long,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -117,6 +125,80 @@ fun ChatScreen(
     //  - follow=false → the user scrolled away; never fight their gesture
     var follow by remember(chatId) { mutableStateOf(true) }
     var didInitialScroll by remember(chatId) { mutableStateOf(false) }
+    var didInitialBackfill by remember(chatId) { mutableStateOf(false) }
+
+    // One gesture = at most one older-history request. `consumed` resets when a
+    // new scroll gesture starts; it is independent from the short-list backfill.
+    var loadMoreGestureConsumed by remember(chatId) { mutableStateOf(false) }
+    var pendingAnchor by remember(chatId) { mutableStateOf<PrependAnchor?>(null) }
+    val latestState by rememberUpdatedState(state)
+
+    fun requestLoadMore() {
+        val s = latestState
+        if (!s.hasMore || s.loading || s.loadingMore || s.oldestId <= 0L) return
+        loadMoreGestureConsumed = true
+        val offsetRow = if (s.hasMore) 1 else 0
+        val turnIndex = (listState.firstVisibleItemIndex - offsetRow).coerceAtLeast(0)
+        val anchorTurn = s.turns.getOrNull(turnIndex)
+        pendingAnchor = anchorTurn?.let {
+            PrependAnchor(
+                turnId = it.turnId,
+                offset = listState.firstVisibleItemScrollOffset,
+                requestedOldestId = s.oldestId,
+            )
+        }
+        vm.loadMore()
+    }
+
+    LaunchedEffect(listState, chatId) {
+        var wasScrolling = false
+        snapshotFlow { listState.isScrollInProgress to listState.firstVisibleItemIndex }
+            .collect { (scrolling, index) ->
+                if (scrolling && !wasScrolling) {
+                    // A new drag/fling starts: allow one request for it.
+                    loadMoreGestureConsumed = false
+                }
+                wasScrolling = scrolling
+                if (!loadMoreGestureConsumed && index <= 2) {
+                    requestLoadMore()
+                }
+            }
+    }
+
+    // Short first page: wait until the LazyColumn has actually been laid out,
+    // then only backfill when the content cannot scroll in EITHER direction.
+    // `!canScrollForward` alone is also true at the bottom of a long list, which
+    // used to consume the gesture slot and make later upward scrolls do nothing.
+    LaunchedEffect(state.loading, state.hasMore, state.oldestId) {
+        if (state.loading || !state.hasMore || state.loadingMore || didInitialBackfill) {
+            return@LaunchedEffect
+        }
+        snapshotFlow { listState.layoutInfo.totalItemsCount }
+            .first { it > 0 }
+        if (!listState.canScrollBackward && !listState.canScrollForward) {
+            didInitialBackfill = true
+            requestLoadMore()
+        }
+    }
+
+    LaunchedEffect(state.loadingMore, state.loadMoreError, state.oldestId) {
+        val anchor = pendingAnchor ?: return@LaunchedEffect
+        if (state.loadingMore) return@LaunchedEffect
+        if (state.loadMoreError != null) {
+            pendingAnchor = null
+            return@LaunchedEffect
+        }
+        if (state.oldestId == anchor.requestedOldestId) {
+            if (!state.hasMore) pendingAnchor = null
+            return@LaunchedEffect
+        }
+        val index = state.turns.indexOfFirst { it.turnId == anchor.turnId }
+        if (index >= 0) {
+            val offsetRow = if (state.hasMore) 1 else 0
+            listState.scrollToItem(index + offsetRow, anchor.offset)
+        }
+        pendingAnchor = null
+    }
 
     var input by rememberSaveable(chatId) { mutableStateOf("") }
     var attachment by remember(chatId) { mutableStateOf<PendingAttachment?>(null) }
@@ -418,10 +500,37 @@ fun ChatScreen(
                     ) {
                         if (state.hasMore) {
                             item(key = "load_more") {
-                                TextButton(
-                                    onClick = vm::loadMore,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) { Text("加载更早的消息") }
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(44.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    when {
+                                        state.loadingMore -> CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            strokeWidth = 2.dp,
+                                        )
+
+                                        state.loadMoreError != null -> TextButton(
+                                            onClick = { requestLoadMore() },
+                                        ) {
+                                            Text("加载失败，点击重试")
+                                        }
+
+                                        else -> if (!listState.canScrollForward) {
+                                            TextButton(
+                                                onClick = { requestLoadMore() },
+                                            ) { Text("加载更早消息") }
+                                        } else {
+                                            Text(
+                                                "上滑加载更早消息",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                         items(state.turns, key = { it.turnId }) { turn ->
