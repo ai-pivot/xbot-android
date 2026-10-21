@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Verify tag matches version.properties
+        run: |
+          set -euo pipefail
+          VERSION_NAME=$(awk -F= '/^versionName=/{print $2}' version.properties)
+          if [ "${GITHUB_REF_NAME}" != "v${VERSION_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match version v${VERSION_NAME}" >&2
+            exit 1
+          fi
+
+      - name: Restore signing material
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p keystore
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > keystore/xbot-release.jks
+          {
+            echo "storeFile=keystore/xbot-release.jks"
+            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "keyPassword=$ANDROID_KEY_PASSWORD"
+          } > keystore.properties
+
+      - name: Build release
+        run: ./gradlew :app:assembleRelease :app:testDebugUnitTest :app:lintDebug --no-daemon
+
+      - name: Generate latest.json
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/app-release.apk
+          VERSION_CODE=$(awk -F= '/^versionCode=/{print $2}' version.properties)
+          VERSION_NAME=$(awk -F= '/^versionName=/{print $2}' version.properties)
+          SIZE=$(stat -c%s "$APK")
+          SHA=$(sha256sum "$APK" | awk '{print $1}')
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/xbot-android-${VERSION_CODE}.apk"
+          CHANGELOG=$(cat CHANGELOG.md 2>/dev/null || true)
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="Release ${VERSION_NAME}"
+          fi
+          python3 - "$SIZE" "$SHA" "$VERSION_CODE" "$VERSION_NAME" "$URL" "$CHANGELOG" <<'PY'
+          import datetime
+          import json
+          import sys
+
+          size, sha, code, name, url, changelog = sys.argv[1:7]
+          print(json.dumps({
+              "versionCode": int(code),
+              "versionName": name,
+              "minSdk": 26,
+              "size": int(size),
+              "sha256": sha,
+              "url": url,
+              "changelog": changelog,
+              "mandatory": False,
+              "publishedAt": datetime.datetime.now(datetime.timezone.utc).strftime(
+                  "%Y-%m-%dT%H:%M:%SZ"
+              ),
+          }, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION_CODE=$(awk -F= '/^versionCode=/{print $2}' version.properties)
+          VERSION_NAME=$(awk -F= '/^versionName=/{print $2}' version.properties)
+          cp app/build/outputs/apk/release/app-release.apk "xbot-android-${VERSION_CODE}.apk"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "xbot-android v${VERSION_NAME}" \
+            --generate-notes \
+            "xbot-android-${VERSION_CODE}.apk" \
+            latest.json
