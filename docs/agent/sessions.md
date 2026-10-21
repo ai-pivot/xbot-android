@@ -22,8 +22,20 @@ POST /api/rpc            set_cwd {channel, chat_id, dir, force: true}
 
 ## 候选目录从哪来
 
-工作目录在**服务器**上，手机侧看不到文件系统，服务端也没有目录浏览接口
-（`channel/web` 里没有 `list_dir` / `fs/list` 之类的端点）。所以 UI 是「手输 + 候选」：
+工作目录在**服务器**上，手机侧看不到那台机器的文件系统，所以不能用 Android 的 SAF 选目录，
+要走服务端的文件接口（Web 端目录树用的同一套）：
+
+```
+POST /api/fs/list {"path": "/home/cjw", "show_hidden": false}
+→ {"entries": [{"name":"xbot","isDir":true,"size":0,"mode":"drwxr-xr-x","modTime":"..."}]}
+```
+
+- 新建会话弹窗里点输入框右侧的文件夹图标 → 目录浏览对话框：列子目录、进出、回上一级，
+  「使用此目录」把当前路径写回输入框。`FsEntry` / `joinPath` / `parentPath` 在 `data/FileSystem.kt`，
+  路径边界（根 `/`、尾斜杠、空值）由 `FilePathTest` 钉住。
+- 服务端只返回名字（`entries[].name`），完整路径由手机侧拼，所以别把 `name` 当绝对路径用。
+- 只显示 `isDir` 的项；空目录与「读取失败」要分开提示（前者是正常空态）。
+- 另外还给「一点即填」的候选：
 
 - `AppPrefs.recentWorkDirs`：最近用过的，最新在前，最多 5 个，存 SharedPreferences（JSON 数组）。
   只有 `set_cwd` 成功才记；纯本地状态，跨设备不同步（Web 端存 localStorage）。

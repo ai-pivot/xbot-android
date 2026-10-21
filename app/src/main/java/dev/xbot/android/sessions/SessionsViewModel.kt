@@ -5,7 +5,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.xbot.android.XbotApp
 import dev.xbot.android.data.UnauthorizedException
+import dev.xbot.android.data.FsEntry
 import dev.xbot.android.data.UserChat
+import dev.xbot.android.data.parentPath
 import dev.xbot.android.data.workDirSuggestions
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -15,6 +17,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+/** 新建会话弹窗里的目录浏览状态（服务端 /api/fs/list）。 */
+data class DirBrowserUi(
+    val path: String = "/",
+    val dirs: List<FsEntry> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+)
 
 data class SessionsUiState(
     val loading: Boolean = true,
@@ -27,6 +37,8 @@ data class SessionsUiState(
     val notice: String? = null,
     /** 新建会话弹窗的工作目录候选（最近用过 + 现有会话），由 VM 算好给 UI 渲染。 */
     val workDirSuggestions: List<String> = emptyList(),
+    /** 非 null 表示目录浏览对话框打开中。 */
+    val browser: DirBrowserUi? = null,
 )
 
 class SessionsViewModel(app: Application) : AndroidViewModel(app) {
@@ -97,6 +109,61 @@ class SessionsViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * 打开目录浏览：从 [startPath]（空则用最近用过的目录，再退回 `/`）开始逐级浏览。
+     * 工作目录在服务器上，只能用服务端 `/api/fs/list` 列目。
+     */
+    fun openDirBrowser(startPath: String = "") {
+        val start = startPath.trim().ifBlank {
+            _state.value.workDirSuggestions.firstOrNull().orEmpty().ifBlank { "/" }
+        }
+        _state.update { it.copy(browser = DirBrowserUi(path = start, loading = true)) }
+        loadDirs(start)
+    }
+
+    fun browseDir(path: String) {
+        if (path.isBlank()) return
+        _state.update { it.copy(browser = (it.browser ?: DirBrowserUi()).copy(path = path, loading = true, error = null)) }
+        loadDirs(path)
+    }
+
+    fun browseUp() {
+        val current = _state.value.browser ?: return
+        browseDir(parentPath(current.path))
+    }
+
+    fun closeDirBrowser() {
+        _state.update { it.copy(browser = null) }
+    }
+
+    private fun loadDirs(path: String) {
+        viewModelScope.launch {
+            runCatching { withAuthRetry { api.listDir(path) } }
+                .onSuccess { entries ->
+                    _state.update { current ->
+                        val browser = current.browser ?: return@update current
+                        // 只接受仍然指向同一路径的结果，避免快速连点时的错序覆盖
+                        if (browser.path != path) current else current.copy(
+                            browser = browser.copy(
+                                dirs = entries.filter { it.isDir && it.name.isNotEmpty() }
+                                    .sortedBy { it.name.lowercase() },
+                                loading = false,
+                                error = null,
+                            ),
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    _state.update { current ->
+                        val browser = current.browser ?: return@update current
+                        if (browser.path != path) current else current.copy(
+                            browser = browser.copy(loading = false, error = e.message ?: "无法读取该目录"),
+                        )
+                    }
+                }
         }
     }
 

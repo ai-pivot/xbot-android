@@ -21,6 +21,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -61,6 +63,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.xbot.android.data.UserChat
+import dev.xbot.android.data.joinPath
 import dev.xbot.android.ui.components.shortenPath
 import dev.xbot.android.ui.components.PathText
 import dev.xbot.android.update.UpdateViewModel
@@ -346,6 +349,14 @@ fun SessionsScreen(
                         placeholder = { Text("默认：服务器工作目录") },
                         supportingText = { Text("服务器上的绝对路径，例如 /home/cjw/project") },
                         singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = { vm.openDirBrowser(createWorkDir) }) {
+                                Icon(
+                                    Icons.Outlined.FolderOpen,
+                                    contentDescription = "浏览服务器目录",
+                                )
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(),
                     )
                     if (state.workDirSuggestions.isNotEmpty()) {
@@ -392,6 +403,93 @@ fun SessionsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showCreate = false }) { Text("取消") }
+            },
+        )
+    }
+
+    state.browser?.let { browser ->
+        AlertDialog(
+            onDismissRequest = { vm.closeDirBrowser() },
+            title = { Text("选择工作目录") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { vm.browseUp() },
+                            enabled = browser.path != "/" && !browser.loading,
+                        ) {
+                            Icon(Icons.Filled.ArrowUpward, contentDescription = "上一级")
+                        }
+                        Text(
+                            text = browser.path,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    when {
+                        browser.loading -> Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                        }
+
+                        browser.error != null -> Text(
+                            text = browser.error.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+
+                        browser.dirs.isEmpty() -> Text(
+                            text = "这个目录下没有子目录",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+
+                        else -> LazyColumn(modifier = Modifier.height(240.dp)) {
+                            items(browser.dirs, key = { it.name }) { entry ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { vm.browseDir(joinPath(browser.path, entry.name)) }
+                                        .padding(vertical = 10.dp, horizontal = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.FolderOpen,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        entry.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        createWorkDir = browser.path
+                        vm.closeDirBrowser()
+                    },
+                    enabled = !browser.loading && browser.error == null,
+                ) { Text("使用此目录") }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.closeDirBrowser() }) { Text("取消") }
             },
         )
     }

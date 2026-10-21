@@ -114,6 +114,19 @@ class XbotApi(private val prefs: AppPrefs) {
      * 注意：`POST /api/chats/create` 没有 work_dir 参数，所以只能在建完会话后设置；
      * 这一步失败不代表会话创建失败。
      */
+    /**
+     * 列出服务器上某个目录的内容（Web 端目录树用的同一个接口）。
+     * 新建会话时的工作目录选择器靠它做逐级浏览：工作目录在**服务器**上，
+     * 手机侧的文件选择器（SAF）拿不到这种路径。
+     */
+    suspend fun listDir(path: String, showHidden: Boolean = false): List<FsEntry> {
+        val body = buildJsonObject {
+            put("path", path)
+            put("show_hidden", showHidden)
+        }.toString()
+        return decodeEnvelope<FsListResponse>(execute(post("/api/fs/list", body))).entries
+    }
+
     suspend fun setCwd(chatId: String, dir: String, channel: String = "web") {
         rpc(
             "set_cwd",
