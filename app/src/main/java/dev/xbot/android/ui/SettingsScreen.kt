@@ -85,6 +85,7 @@ fun SettingsScreen(
     val updateVm: UpdateViewModel = viewModel()
     val updateState by updateVm.state.collectAsStateWithLifecycle()
     var updateUrl by remember { mutableStateOf(prefs.updateManifestUrl) }
+    var mediaBase by remember { mutableStateOf(prefs.mediaBaseUrl) }
 
     LaunchedEffect(Unit) { settingsVm.load() }
 
@@ -175,6 +176,22 @@ fun SettingsScreen(
                 InfoRow("账号", prefs.secrets.username().ifBlank { "未登录" })
                 InfoRow("当前会话", prefs.activeChatId.ifBlank { "未选择" })
                 InfoRow("通道", prefs.activeChannel)
+                OutlinedTextField(
+                    value = mediaBase,
+                    onValueChange = {
+                        mediaBase = it
+                        prefs.mediaBaseUrl = it
+                    },
+                    label = { Text("媒体/对象存储地址") },
+                    placeholder = { Text("https://minio.cjiw.site") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "用于把 localhost/127.0.0.1 图片地址重写到公网对象存储；留空则不重写。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             SettingsCard(title = "模型管理") {
