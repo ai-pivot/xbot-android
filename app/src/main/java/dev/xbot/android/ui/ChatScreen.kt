@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -377,13 +376,24 @@ fun ChatScreen(
                         }
                     },
                     title = {
-                        Column {
+                        Column(Modifier.fillMaxWidth()) {
                             Text(
                                 state.title.ifBlank { title.ifBlank { chatId } },
+                                style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            // 副标题：状态点 + 模型名（点击切换模型）。整行单行布局，
+                            // 模型名可省略，避免像过去那样把标题挤到只剩一个字。
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable { showModelPicker = true }
+                                    .padding(vertical = 1.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Box(
                                     modifier = Modifier
                                         .size(6.dp)
@@ -401,21 +411,35 @@ fun ChatScreen(
                                     },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
+                                Text(
+                                    " · ",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
+                                Text(
+                                    currentModelEntry?.title
+                                        ?: sessionModel?.model.orEmpty().ifBlank { "选择模型" },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                Icon(
+                                    Icons.Filled.KeyboardArrowDown,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
                                 )
                             }
                         }
                     },
                     actions = {
-                        TextButton(onClick = { showModelPicker = true }) {
-                            Text(
-                                currentModelEntry?.title
-                                    ?: sessionModel?.model?.take(18).orEmpty().ifBlank { "模型" },
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 150.dp),
-                            )
-                        }
                         IconButton(
                             onClick = { showRewind = true },
                             enabled = !state.busy && state.turns.any { it.userHistoryId > 0L },
