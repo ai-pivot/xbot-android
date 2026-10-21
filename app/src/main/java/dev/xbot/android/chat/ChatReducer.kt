@@ -43,6 +43,44 @@ object ChatReducer {
             busy = response.processing || activeRunning,
             hasMore = response.hasMore,
             oldestId = response.oldestId,
+            loadingMore = false,
+            loadMoreError = null,
+            needsReload = false,
+            pendingUserText = null,
+        )
+        if (active != null && (active.turnId > 0L || activeRunning)) {
+            next = applyProgress(next, active)
+        }
+        return next
+    }
+
+    /**
+     * A latest-page reload must not discard pages the user already loaded by
+     * scrolling up. Merge the new page into the existing turns and keep the
+     * earliest pagination cursor; otherwise SSE resync/reload makes old history
+     * disappear and the UI immediately re-fetches it (the reload/loadMore loop).
+     */
+    fun mergeLatestHistory(state: ChatUiState, response: HistoryResponse): ChatUiState {
+        val turns = LinkedHashMap<Long, TurnUi>()
+        state.turns.forEach { turns[it.turnId] = it }
+        response.messages.forEach { message -> mergeHistoryMessage(turns, message) }
+
+        val keepOlderCursor = state.oldestId > 0L &&
+            response.oldestId > 0L &&
+            state.oldestId < response.oldestId
+
+        val active = response.activeProgress
+        val activeRunning = active != null && active.isRunning()
+
+        var next = state.copy(
+            turns = turns.values.sortedBy { it.turnId },
+            loading = false,
+            error = null,
+            busy = response.processing || activeRunning,
+            hasMore = if (keepOlderCursor) state.hasMore else response.hasMore,
+            oldestId = if (keepOlderCursor) state.oldestId else response.oldestId,
+            loadingMore = false,
+            loadMoreError = null,
             needsReload = false,
             pendingUserText = null,
         )
@@ -62,6 +100,8 @@ object ChatReducer {
             hasMore = response.hasMore,
             oldestId = response.oldestId,
             loading = false,
+            loadingMore = false,
+            loadMoreError = null,
         )
     }
 

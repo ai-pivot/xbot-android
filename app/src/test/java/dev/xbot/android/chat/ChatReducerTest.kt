@@ -271,6 +271,39 @@ class ChatReducerTest {
     }
 
     @Test
+    fun `latest reload merges into older pages and keeps the older cursor`() {
+        val older = ChatReducer.withHistory(
+            ChatReducer.empty("chat_1", "web"),
+            HistoryResponse(
+                ok = true,
+                messages = listOf(
+                    HistoryMessage(id = 1, role = "user", content = "old", turnId = 1),
+                    HistoryMessage(id = 2, role = "assistant", content = "old reply", turnId = 1),
+                ),
+                hasMore = true,
+                oldestId = 1,
+            ),
+        )
+
+        val merged = ChatReducer.mergeLatestHistory(
+            older,
+            HistoryResponse(
+                ok = true,
+                messages = listOf(
+                    HistoryMessage(id = 3, role = "user", content = "new", turnId = 2),
+                    HistoryMessage(id = 4, role = "assistant", content = "new reply", turnId = 2),
+                ),
+                hasMore = true,
+                oldestId = 3,
+            ),
+        )
+
+        assertEquals(listOf(1L, 2L), merged.turns.map { it.turnId })
+        assertEquals(1L, merged.oldestId)
+        assertTrue(merged.hasMore)
+    }
+
+    @Test
     fun `completion-only active progress does not mark an idle session busy`() {
         val state = ChatReducer.withHistory(
             ChatReducer.empty("chat_1", "web"),
