@@ -14,7 +14,10 @@ data class RewindResponse(
     val ok: Boolean = false,
     @SerialName("target_history_id") val targetHistoryId: Long = 0L,
     val draft: String = "",
-    @SerialName("history_rewound") val historyRewound: Int = 0,
-    @SerialName("files_rewound") val filesRewound: Int = 0,
+    // 服务端 protocol.HistoryRewindResult 里这两个字段都是 bool。
+    // 曾误声明为 Int，导致回退成功、响应却在解析阶段抛
+    // "Unexpected symbol 't' in numeric literal at path: $.data.files_rewound"。
+    @SerialName("history_rewound") val historyRewound: Boolean = false,
+    @SerialName("files_rewound") val filesRewound: Boolean = false,
     @SerialName("checkpoint_error") val checkpointError: String = "",
 )

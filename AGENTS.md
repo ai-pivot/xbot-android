@@ -40,6 +40,8 @@ iteration 按序号合并，checkpoint 替换 / delta 追加，收到 turn 结�
   往 `actions` 里塞长文本会把标题挤成单字。详见 `docs/agent/ui.md`。
 - **发版 APK 用 `keystore/xbot-release.jks` 签名**；同 versionCode 可覆盖安装，降级会被 Android 拒绝，
   所以更新清单里的 `versionCode` 必须**大于**已安装版本，否则 app 内检查更新不会提示。
+- **REST/RPC 响应字段类型必须和服务端 `protocol` 结构体对齐**：把 `bool` 写成 `Int` 会在反序列化阶段抛
+  `Unexpected symbol 't' in numeric literal`，而这时服务端其实已经执行成功了（Rewind 就栽在这上面）。
 - **`release.yml` 会把 `CHANGELOG.md` 全文当作更新说明**（文件不存在时退化成 `Release x.y.z`）；
   该文件按版本分段维护，改动时保持 `## [x.y.z]` 小节标题格式。
 - **MinIO 用 `xbotlan` 别名**（`127.0.0.1:9000`）写 `uploads/share/android/`，公网前缀是

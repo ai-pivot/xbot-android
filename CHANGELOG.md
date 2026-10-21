@@ -13,6 +13,10 @@
 - 会话项显示工作目录（`work_dir`，路径按段左截断保留尾部）；聊天页把它显示在输入框上方那行上下文占用的旁边。
 - 数据来自 `/api/session/status`：服务端还没有真实 token 数（新会话）时不显示指示器；回合进行中用上一次的上限估算并标注。
 
+### 修复
+- Rewind（回退）在服务端其实已成功，客户端却报 `Unexpected symbol 't' in numeric literal at path: $.data.files_rewound`：`history_rewound` / `files_rewound` 是布尔值，模型误声明成整数。
+- 回退结果文案区分「历史已截断」与「文件快照是否恢复」，文件没恢复时不再被一句「已回退」掩盖。
+
 ### 变更
 - 输入区高度从约 72dp 压到约 48dp：文本框改用 `BasicTextField`（`OutlinedTextField` 在装饰盒内固定 56dp 最小高度，压不下去），图标按钮 48dp → 36dp。
 
