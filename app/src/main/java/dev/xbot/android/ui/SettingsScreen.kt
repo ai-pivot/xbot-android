@@ -61,6 +61,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.xbot.android.BuildConfig
 import dev.xbot.android.XbotApp
 import dev.xbot.android.chat.ChatViewModel
+import dev.xbot.android.data.UpdateManifest
 import dev.xbot.android.service.startNotificationService
 import dev.xbot.android.service.stopNotificationService
 import dev.xbot.android.update.UpdateViewModel
@@ -85,6 +86,7 @@ fun SettingsScreen(
     val updateVm: UpdateViewModel = viewModel()
     val updateState by updateVm.state.collectAsStateWithLifecycle()
     var updateUrl by remember { mutableStateOf(prefs.updateManifestUrl) }
+    var updateChannel by remember { mutableStateOf(prefs.updateChannel) }
     var mediaBase by remember { mutableStateOf(prefs.mediaBaseUrl) }
 
     LaunchedEffect(Unit) { settingsVm.load() }
@@ -351,20 +353,60 @@ fun SettingsScreen(
                     "当前版本",
                     "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                 )
-                OutlinedTextField(
-                    value = updateUrl,
-                    onValueChange = { updateUrl = it },
-                    label = { Text("更新清单地址") },
-                    singleLine = true,
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                )
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        UpdateManifest.CHANNEL_STABLE to "稳定版",
+                        UpdateManifest.CHANNEL_DEV to "开发版",
+                        UpdateManifest.CHANNEL_CUSTOM to "自定义",
+                    ).forEach { (value, label) ->
+                        FilterChip(
+                            selected = updateChannel == value,
+                            onClick = {
+                                updateChannel = value
+                                updateVm.setChannel(value)
+                            },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                if (updateChannel == UpdateManifest.CHANNEL_CUSTOM) {
+                    OutlinedTextField(
+                        value = updateUrl,
+                        onValueChange = { updateUrl = it },
+                        label = { Text("更新清单地址") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    Text(
+                        if (updateChannel == UpdateManifest.CHANNEL_DEV) {
+                            "开发版：master 每次构建，版本号为 x.y.z-dev.N，更新更频繁。"
+                        } else {
+                            "稳定版：仅正式发布（v* tag）的版本。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (BuildConfig.BUILD_CHANNEL == UpdateManifest.CHANNEL_DEV) {
+                    Text(
+                        "当前安装的是开发版构建",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     TextButton(
                         onClick = {
-                            updateVm.setManifestUrl(updateUrl)
+                            if (updateChannel == UpdateManifest.CHANNEL_CUSTOM) {
+                                updateVm.setManifestUrl(updateUrl)
+                            }
                             updateVm.check(manual = true)
                         },
                         enabled = !updateState.checking && !updateState.downloading,
@@ -380,6 +422,13 @@ fun SettingsScreen(
                         error,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                updateState.note?.let { note ->
+                    Text(
+                        note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 val manifest = updateState.manifest

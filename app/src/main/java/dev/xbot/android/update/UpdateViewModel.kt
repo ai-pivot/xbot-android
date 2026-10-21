@@ -32,10 +32,14 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 data class UpdateUiState(
+    /** Channel the last check ran against (stable / dev / custom). */
+    val channel: String = UpdateManifest.CHANNEL_STABLE,
     val checking: Boolean = false,
     val manifest: UpdateManifest? = null,
     val available: Boolean = false,
     val upToDate: Boolean = false,
+    /** Channel/rollback hint, e.g. dev build looking at the stable channel. */
+    val note: String? = null,
     val downloading: Boolean = false,
     val progress: Float = 0f,
     val verifying: Boolean = false,
@@ -68,29 +72,55 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
     private var downloadJob: Job? = null
 
     fun autoCheck() {
-        if (prefs.updateManifestUrl.isBlank()) return
+        if (!hasManifestSource()) return
         val now = System.currentTimeMillis()
         if (now - prefs.lastUpdateCheckAt < AUTO_CHECK_INTERVAL_MS) return
         prefs.lastUpdateCheckAt = now
         check(manual = false)
     }
 
+    /** Manifest URL for [channel]; empty only when the custom channel has no URL yet. */
+    fun manifestUrl(channel: String = prefs.updateChannel): String = when (channel) {
+        UpdateManifest.CHANNEL_DEV -> "$UPDATE_REPO/releases/download/$DEV_RELEASE_TAG/latest-dev.json"
+        UpdateManifest.CHANNEL_CUSTOM -> prefs.updateManifestUrl
+        else -> "$UPDATE_REPO/releases/latest/download/latest.json"
+    }
+
+    fun hasManifestSource(channel: String = prefs.updateChannel): Boolean =
+        manifestUrl(channel).isNotBlank()
+
     fun setManifestUrl(url: String) {
         prefs.updateManifestUrl = url
-        _state.value = UpdateUiState()
+        _state.value = UpdateUiState(channel = prefs.updateChannel)
+    }
+
+    /** Switch update channel and drop any state belonging to the previous one. */
+    fun setChannel(channel: String) {
+        prefs.updateChannel = channel
+        _state.value = UpdateUiState(channel = channel)
     }
 
     fun check(manual: Boolean) {
         val current = _state.value
         if (current.checking || current.downloading) return
-        val manifestUrl = prefs.updateManifestUrl
-        if (manifestUrl.isBlank()) {
-            _state.update { it.copy(error = "请先在设置中填写更新清单地址") }
+        val channel = prefs.updateChannel
+        val url = manifestUrl(channel)
+        if (url.isBlank()) {
+            _state.update {
+                it.copy(channel = channel, error = "请先填写更新清单地址")
+            }
             return
         }
         viewModelScope.launch {
             _state.update {
-                it.copy(checking = true, error = null, upToDate = false, available = false)
+                it.copy(
+                    channel = channel,
+                    checking = true,
+                    error = null,
+                    upToDate = false,
+                    available = false,
+                    note = null,
+                )
             }
             try {
                 val manifest = withContext(Dispatchers.IO) {
@@ -106,13 +136,25 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
                         XbotJson.decodeFromString<UpdateManifest>(text)
                     }
                 }
-                val available = manifest.versionCode > BuildConfig.VERSION_CODE
+                // Guard against a misconfigured URL: never offer a dev build to a
+                // stable user (or the reverse). The custom channel is exempt.
+                if (channel != UpdateManifest.CHANNEL_CUSTOM &&
+                    manifest.channel.isNotBlank() &&
+                    manifest.channel != channel
+                ) {
+                    throw IOException(
+                        "更新清单渠道不匹配（清单为 ${manifest.channel}，当前为 $channel）",
+                    )
+                }
+                val installed = BuildConfig.VERSION_CODE
+                val available = manifest.versionCode > installed
                 _state.update {
                     it.copy(
                         checking = false,
                         manifest = manifest,
                         available = available,
                         upToDate = !available,
+                        note = if (!available) channelNote(channel, manifest, installed) else null,
                     )
                 }
             } catch (e: Exception) {
@@ -125,6 +167,26 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    /**
+     * Android refuses to install a lower versionCode, so a dev build cannot roll
+     * back to an older stable build without an uninstall. Explain that instead of
+     * showing "已是最新" and letting the user think the switch did nothing.
+     */
+    private fun channelNote(
+        channel: String,
+        manifest: UpdateManifest,
+        installed: Int,
+    ): String? {
+        if (channel != UpdateManifest.CHANNEL_STABLE) return null
+        if (!isDevBuild()) return null
+        if (manifest.versionCode >= installed) return null
+        return "当前为开发版 ${BuildConfig.VERSION_NAME} ($installed)，" +
+            "稳定通道最新为 ${manifest.versionName} (${manifest.versionCode})，" +
+            "版本号更低无法直接安装；如需回退请卸载后重装。"
+    }
+
+    private fun isDevBuild(): Boolean = BuildConfig.BUILD_CHANNEL == UpdateManifest.CHANNEL_DEV
 
     fun download() {
         val manifest = _state.value.manifest ?: return
@@ -316,5 +378,15 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
+
+        /** Repository publishing the APKs and both manifests. */
+        const val UPDATE_REPO = "https://github.com/ai-pivot/xbot-android"
+
+        /**
+         * Long-lived prerelease tag holding the dev manifest. It must stay a
+         * *prerelease* so GitHub's `releases/latest` keeps pointing at the
+         * stable channel.
+         */
+        const val DEV_RELEASE_TAG = "dev"
     }
 }

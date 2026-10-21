@@ -16,6 +16,12 @@ val keystoreProps = Properties().apply {
         keystorePropsFile.inputStream().use { load(it) }
     }
 }
+/**
+ * `-PdevChannel=true` marks the APK as a dev-channel build. Both channels share
+ * the same applicationId and signing key (so installs upgrade in place); only
+ * the wire that publishes them differs.
+ */
+val devChannel = providers.gradleProperty("devChannel").orNull.toBoolean()
 
 android {
     namespace = "dev.xbot.android"
@@ -28,6 +34,7 @@ android {
         versionCode = versionProps.getProperty("versionCode").toInt()
         versionName = versionProps.getProperty("versionName")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "BUILD_CHANNEL", "\"${if (devChannel) "dev" else "stable"}\"")
     }
 
     signingConfigs {
