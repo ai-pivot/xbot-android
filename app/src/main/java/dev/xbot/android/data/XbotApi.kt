@@ -462,6 +462,51 @@ class XbotApi(private val prefs: AppPrefs) {
     ): T = XbotJson.decodeFromJsonElement(rpc(method, params))
 
     // ------------------------------------------------------------------
+    // Unified push (system notifications)
+    // ------------------------------------------------------------------
+
+    suspend fun pushRegister(
+        provider: String,
+        platform: String,
+        address: String,
+        metadata: Map<String, String> = emptyMap(),
+        deviceName: String = "",
+        appVersion: String = "",
+    ) {
+        val body = buildJsonObject {
+            put("provider", provider)
+            put("platform", platform)
+            put("address", address)
+            put("device_name", deviceName)
+            put("app_version", appVersion)
+            put("metadata", buildJsonObject { metadata.forEach { (k, v) -> put(k, v) } })
+        }.toString()
+        execute(post("/api/push/register", body))
+    }
+
+    suspend fun pushUnregister(provider: String, address: String) {
+        val body = buildJsonObject {
+            put("provider", provider)
+            put("address", address)
+        }.toString()
+        execute(post("/api/push/unregister", body))
+    }
+
+    suspend fun pushPresence(provider: String, address: String, active: Boolean) {
+        val body = buildJsonObject {
+            put("provider", provider)
+            put("address", address)
+            put("active", active)
+        }.toString()
+        execute(post("/api/push/presence", body))
+    }
+
+    suspend fun pushTest(): Int {
+        val text = execute(post("/api/push/test", "{}"))
+        return decodeEnvelope<PushTestResponse>(text).sent
+    }
+
+    // ------------------------------------------------------------------
     // Plumbing
     // ------------------------------------------------------------------
 
@@ -538,6 +583,11 @@ class XbotApi(private val prefs: AppPrefs) {
 @kotlinx.serialization.Serializable
 data class CreateChatResponse(
     @kotlinx.serialization.SerialName("chat_id") val chatId: String = "",
+)
+
+@kotlinx.serialization.Serializable
+data class PushTestResponse(
+    val sent: Int = 0,
 )
 
 /**

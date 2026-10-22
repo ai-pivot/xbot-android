@@ -25,14 +25,15 @@ Early MVP. Implemented:
 - Reasoning blocks, native Markdown rendering, code blocks
 - AskUser dialog (options, multi-select, free text, cancel)
 - Send, queue while busy, stop generation, attachments (multipart upload)
-- Foreground notification service: completion / AskUser notifications while backgrounded
+- FCM push notifications: AskUser / turn-complete while backgrounded, with deep link
 - Light/dark Material 3 theme
 
 ## Known limitations
 
-- **Notifications are not system push.** xbot has no FCM/WebPush transport. This app keeps
-  one SSE connection in a foreground service (Android 8+ mandatory ongoing notification).
-  OEM battery managers and Android 15 foreground-service limits can still interrupt it.
+- **Push depends on Google Play services (FCM).** The server sends data-only messages;
+  the app renders them locally. A user "force stop" still blocks all push (Android
+  system behaviour), and some OEM battery managers delay data-only messages.
+  The foreground SSE remains the live-stream path while the app is visible.
 - **Plugin / GenUI views are not rendered.** The web plugin runtime is JavaScript/React.
   Tool output and normal Markdown are native; `ui_mode=genui` content is shown as text.
 - No offline cache yet (history is fetched from the server).
@@ -99,7 +100,7 @@ app/src/main/java/dev/xbot/android/
   chat/        pure chat reducer + ChatViewModel
   sessions/    session list view model/screen
   auth/        login view model/screen
-  service/     foreground SSE notification service, boot receiver, visibility
+  push/        FCM registration, notification rendering, foreground presence
   ui/          Compose navigation, chat/settings screens, markdown/tool components
 ```
 

@@ -212,9 +212,6 @@ fun ChatScreen(
 
     LaunchedEffect(chatId, channel) {
         vm.open(chatId, channel, title)
-        if (app.container.prefs.notificationsEnabled) {
-            runCatching { dev.xbot.android.service.startNotificationService(context) }
-        }
         modelsLoading = true
         runCatching {
             val session = app.container.api.getSessionModel(chatId, channel)

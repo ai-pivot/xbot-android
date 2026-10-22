@@ -36,7 +36,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -49,7 +48,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -61,8 +63,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.xbot.android.BuildConfig
 import dev.xbot.android.XbotApp
 import dev.xbot.android.chat.ChatViewModel
-import dev.xbot.android.service.startNotificationService
-import dev.xbot.android.service.stopNotificationService
+import dev.xbot.android.push.PushRegistrar
 import dev.xbot.android.update.UpdateViewModel
 import kotlinx.coroutines.launch
 
@@ -89,56 +90,24 @@ fun SettingsScreen(
 
     LaunchedEffect(Unit) { settingsVm.load() }
 
-    var notifications by remember { mutableStateOf(prefs.notificationsEnabled) }
+    var fcmToken by remember { mutableStateOf(prefs.fcmToken) }
+    val clipboard = LocalClipboardManager.current
     var showLogout by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
-
-    fun enableNotifications() {
-        if (prefs.activeChatId.isBlank()) {
-            message = "请先打开一个会话，再开启通知。"
-            notifications = false
-            prefs.notificationsEnabled = false
-            return
-        }
-        prefs.notificationsEnabled = true
-        notifications = true
-        runCatching { startNotificationService(context) }
-            .onFailure { message = it.message ?: "无法启动通知服务" }
+    var notificationsAllowed by remember {
+        mutableStateOf(
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) == PackageManager.PERMISSION_GRANTED,
+        )
     }
-
-    fun disableNotifications() {
-        prefs.notificationsEnabled = false
-        notifications = false
-        runCatching { stopNotificationService(context) }
-    }
-
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) {
-            enableNotifications()
-        } else {
-            notifications = false
-            prefs.notificationsEnabled = false
-            message = "通知权限被拒绝，无法显示完成提醒。"
-        }
-    }
-
-    fun toggleNotifications(enabled: Boolean) {
-        if (!enabled) {
-            disableNotifications()
-            return
-        }
-        val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.POST_NOTIFICATIONS,
-            ) != PackageManager.PERMISSION_GRANTED
-        if (needsPermission) {
-            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            enableNotifications()
-        }
+        notificationsAllowed = granted
+        if (!granted) message = "通知权限被拒绝，收不到后台推送。"
     }
 
     Scaffold(
@@ -301,49 +270,100 @@ fun SettingsScreen(
                 }
             }
 
-            SettingsCard(title = "通知") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("后台会话通知", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "通过前台服务维持一条 SSE 连接，在会话完成或 Agent 提问时通知。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(checked = notifications, onCheckedChange = ::toggleNotifications)
-                }
+            SettingsCard(title = "通知权限") {
                 Text(
-                    "说明：xbot 服务端没有系统级推送通道，实时通知依赖这条常驻连接。" +
-                        "系统省电策略或厂商后台限制仍可能中断它。",
+                    if (notificationsAllowed) {
+                        "已允许 xbot 发送通知。"
+                    } else {
+                        "未允许通知，收不到后台推送。"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextButton(
-                    onClick = {
-                        runCatching {
-                            context.startActivity(
-                                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (!notificationsAllowed) {
+                        TextButton(
+                            onClick = {
+                                permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            },
+                        ) { Text("开启通知权限") }
+                    }
+                    TextButton(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            }
+                        },
+                    ) { Text("电池优化设置") }
+                    TextButton(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        Uri.parse("package:${context.packageName}"),
+                                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            }
+                        },
+                    ) { Text("应用权限设置") }
+                }
+            }
+
+            // FCM data push: the server pushes ask_user / turn-complete events;
+            // this device registers its token and renders the notification.
+            SettingsCard(title = "后台推送（FCM）") {
+                Text(
+                    when {
+                        fcmToken.isBlank() ->
+                            "尚未获取到 FCM token。若手机没有 Google Play 服务，后台推送不可用。"
+                        prefs.pushRegistered ->
+                            "已注册到服务端，后台会通过 FCM 接收提问和完成通知。"
+                        else ->
+                            "已获取 token，但尚未注册到服务端；登录后会自动重试。"
                     },
-                ) { Text("打开电池优化设置") }
-                TextButton(
-                    onClick = {
-                        runCatching {
-                            context.startActivity(
-                                Intent(
-                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                    Uri.parse("package:${context.packageName}"),
-                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        }
-                    },
-                ) { Text("应用权限设置") }
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = {
+                            fcmToken = prefs.fcmToken
+                            PushRegistrar.onAppStart(app)
+                        },
+                    ) { Text("刷新/重新注册") }
+                    TextButton(
+                        enabled = fcmToken.isNotBlank(),
+                        onClick = { clipboard.setText(AnnotatedString(fcmToken)) },
+                    ) { Text("复制 token") }
+                    TextButton(
+                        enabled = fcmToken.isNotBlank(),
+                        onClick = {
+                            scope.launch {
+                                val result = runCatching { PushRegistrar.sendTest(app) }
+                                message = result.fold(
+                                    onSuccess = { "已发送测试通知（$it 个目标）" },
+                                    onFailure = { "发送失败：${it.message}" },
+                                )
+                            }
+                        },
+                    ) { Text("发送测试通知") }
+                }
+                if (fcmToken.isNotBlank()) {
+                    Text(
+                        fcmToken,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                Text(
+                    "收不到时检查：系统通知权限、电池优化白名单、以及服务端是否已启用 push。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             SettingsCard(title = "更新") {
@@ -490,10 +510,9 @@ fun SettingsScreen(
                     onClick = {
                         showLogout = false
                         scope.launch {
+                            PushRegistrar.onLogout(app)
                             runCatching { api.logout() }
-                            prefs.notificationsEnabled = false
                             prefs.clearSession()
-                            runCatching { stopNotificationService(context) }
                             chatViewModel.reset()
                             onLogout()
                         }

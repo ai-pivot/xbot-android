@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.xbot.android.XbotApp
 import dev.xbot.android.data.XbotApi
+import dev.xbot.android.push.PushRegistrar
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -97,6 +98,7 @@ class LoginViewModel(app: Application) : AndroidViewModel(app) {
                     api.login(current.username, current.password)
                 }
                 _state.update { it.copy(loading = false, success = true) }
+                PushRegistrar.onLogin(getApplication())
             } catch (e: Exception) {
                 _state.update {
                     it.copy(loading = false, error = e.message ?: "登录失败")
@@ -112,8 +114,8 @@ class LoginViewModel(app: Application) : AndroidViewModel(app) {
 
     fun logout() {
         viewModelScope.launch {
+            PushRegistrar.onLogout(getApplication())
             runCatching { api.logout() }
-            prefs.notificationsEnabled = false
             _state.update {
                 LoginUiState(
                     serverUrl = prefs.serverUrl,

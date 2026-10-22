@@ -96,9 +96,15 @@ class AppPrefs(context: Context) {
         get() = prefs.getString(KEY_CHANNEL, "web").orEmpty().ifBlank { "web" }
         set(value) = prefs.edit().putString(KEY_CHANNEL, value).apply()
 
-    var notificationsEnabled: Boolean
-        get() = prefs.getBoolean(KEY_NOTIF, false)
-        set(value) = prefs.edit().putBoolean(KEY_NOTIF, value).apply()
+    /** FCM registration token (shown in Settings for diagnostics). */
+    var fcmToken: String
+        get() = prefs.getString(KEY_FCM_TOKEN, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_FCM_TOKEN, value).apply()
+
+    /** Whether the current token was accepted by the server. */
+    var pushRegistered: Boolean
+        get() = prefs.getBoolean(KEY_PUSH_REGISTERED, false)
+        set(value) = prefs.edit().putBoolean(KEY_PUSH_REGISTERED, value).apply()
 
     var updateManifestUrl: String
         get() = prefs.getString(KEY_UPDATE_URL, "").orEmpty()
@@ -164,7 +170,8 @@ class AppPrefs(context: Context) {
         const val KEY_SERVER = "server_url"
         const val KEY_CHAT = "active_chat_id"
         const val KEY_CHANNEL = "active_channel"
-        const val KEY_NOTIF = "notifications_enabled"
+        const val KEY_FCM_TOKEN = "fcm_token"
+        const val KEY_PUSH_REGISTERED = "push_registered"
         const val KEY_SEQ_PREFIX = "last_seq_"
         const val KEY_COOKIES = "cookies"
         const val KEY_UPDATE_URL = "update_manifest_url"

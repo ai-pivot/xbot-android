@@ -2,6 +2,7 @@ package dev.xbot.android.ui
 
 import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavType
@@ -14,7 +15,7 @@ import dev.xbot.android.auth.LoginScreen
 import dev.xbot.android.sessions.SessionsScreen
 
 @Composable
-fun XbotNavHost() {
+fun XbotNavHost(deepLinkChatId: String? = null) {
     val nav = rememberNavController()
     val context = LocalContext.current
     val prefs = (context.applicationContext as XbotApp).container.prefs
@@ -92,6 +93,16 @@ fun XbotNavHost() {
         composable("models") {
             ModelSettingsScreen(
                 onBack = { nav.popBackStack() },
+            )
+        }
+    }
+
+    // Notification tap → open the target chat. Cold start lands here after the
+    // first composition; onNewIntent updates the same state while running.
+    LaunchedEffect(deepLinkChatId) {
+        if (!deepLinkChatId.isNullOrBlank() && prefs.cookies.isNotEmpty()) {
+            nav.navigate(
+                "chat/${Uri.encode(deepLinkChatId)}/web/${Uri.encode(deepLinkChatId)}",
             )
         }
     }

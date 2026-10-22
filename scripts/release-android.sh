@@ -37,6 +37,16 @@ fi
 OBJECT="xbot-android-${VERSION_CODE}.apk"
 CHANGELOG="${CHANGELOG:-}"
 
+# Auto-extract this version's section from CHANGELOG.md when the caller did not
+# pass CHANGELOG explicitly (one-command publishing).
+if [ -z "$CHANGELOG" ] && [ -f CHANGELOG.md ]; then
+  CHANGELOG="$(awk -v v="$VERSION_NAME" '
+    index($0, "## [" v "]") == 1 { f = 1; next }
+    f && /^## \[/ { exit }
+    f
+  ' CHANGELOG.md | sed '/^[[:space:]]*$/d')"
+fi
+
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
