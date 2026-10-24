@@ -11,7 +11,7 @@ app/src/main/java/dev/xbot/android/
   chat/       ChatReducer（纯函数状态机）+ ChatViewModel
   sessions/   会话列表 ViewModel/Screen
   auth/       登录 ViewModel/Screen
-  service/    前台 SSE 通知服务、开机自启、前台可见性
+  push/       FCM 推送注册（登录/换 token/退出）、通知渲染、前台 presence
   ui/         Compose 导航、聊天/设置页、markdown/tool 组件、theme
 ```
 

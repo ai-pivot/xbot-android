@@ -29,3 +29,7 @@ secrets.properties
 keystore.properties
 keystore/
 *.jks
+
+# Firebase client config IS committed: it only contains client identifiers
+# (project_id / app_id / api_key; the API key is restricted by package name).
+# The real secret is the server-side service-account JSON — never commit that.
