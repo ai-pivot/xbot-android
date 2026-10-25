@@ -41,10 +41,13 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
     （布局非空 + 最后一项就是末尾 + 底边在可视区内）才能恢复 `follow`。
   - 滚动一开始就 `follow = false`，不看此刻能否向下滚；「跳到顶部」按钮显式置 `false`。
   - 贴底滚动前先等 `isScrollInProgress == false`，别和用户手势抢 `LazyListState`。
-  - **`scrollToItem(last)` 不是「到底部」**：它只把最后一项的**顶部**对齐，而且它触发的
-    measure 要到下一帧才落地；紧接着的 `scrollBy` 会读到旧布局（「不能再往下滚」）而
-    一个像素都不消费 —— 于是停在最后一项顶部（表现：距底部差两行）。必须先等一帧
-    （`withFrameNanos {}`）确认 `canScrollForward` 再滚，必要时重试几帧。
+  - **`scrollToItem(last)` 不是「到底部」**：它只把最后一项的**顶部**对齐，而它触发的
+    measure 要到**下一帧的 layout 之后**才生效；在那之前 `canScrollForward` / `scrollBy`
+    用的还是旧位置的测量结果（跟随状态下旧位置就在底部 → 读到 false），于是 `scrollBy`
+    一个像素都不消费 —— 停在最后一项顶部。新一轮对话里 TurnBlock 的开头正是用户气泡，
+    所以症状会表现为「跳到了用户那条消息」。`withFrameNanos` 回调也排在 layout 之前，
+    必须**等两帧**再判断/再滚（见 `scrollToBottom`）。
+  - 上滑补页的锚点恢复带 `scrollEpoch` 保护：请求发出后用户又滚过就不再拽回旧锚点。
   - 跟随尾部要用**单个长生命周期 collector**（`snapshotFlow { tail }` 在
     `LaunchedEffect(listState)` 里），不要用以 `tail` 为 key 的 `LaunchedEffect`：
     后者每次尾部变化都取消上一次协程，滚动做到一半被取消就又停到最后一项顶部。

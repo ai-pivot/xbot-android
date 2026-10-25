@@ -102,6 +102,7 @@ private data class PrependAnchor(
     val turnId: Long,
     val offset: Int,
     val requestedOldestId: Long,
+    val epoch: Int,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -131,6 +132,8 @@ fun ChatScreen(
     // new scroll gesture starts; it is independent from the short-list backfill.
     var loadMoreGestureConsumed by remember(chatId) { mutableStateOf(false) }
     var pendingAnchor by remember(chatId) { mutableStateOf<PrependAnchor?>(null) }
+    // 每次滚动开始 +1：补页回来时如果用户又动过列表，就别再把人拽回旧锚点。
+    var scrollEpoch by remember(chatId) { mutableStateOf(0) }
     val latestState by rememberUpdatedState(state)
 
     fun requestLoadMore() {
@@ -145,6 +148,7 @@ fun ChatScreen(
                 turnId = it.turnId,
                 offset = listState.firstVisibleItemScrollOffset,
                 requestedOldestId = s.oldestId,
+                epoch = scrollEpoch,
             )
         }
         vm.loadMore()
@@ -192,9 +196,17 @@ fun ChatScreen(
             if (!state.hasMore) pendingAnchor = null
             return@LaunchedEffect
         }
+        // 补页期间用户又自己滚过：别把位置硬拽回旧锚点（那会看起来像「跳到某条用户消息」）。
+        // 带 key 的 LazyColumn 在前插时本来就会按 key 锚住可见项，这里跳过是安全的。
+        if (anchor.epoch != scrollEpoch) {
+            ChatScrollTrace.record("anchor skip (user scrolled) ${listState.snapshot()}")
+            pendingAnchor = null
+            return@LaunchedEffect
+        }
         val index = state.turns.indexOfFirst { it.turnId == anchor.turnId }
         if (index >= 0) {
             val offsetRow = if (state.hasMore) 1 else 0
+            ChatScrollTrace.record("anchor restore turn=${anchor.turnId} idx=$index ${listState.snapshot()}")
             listState.scrollToItem(index + offsetRow, anchor.offset)
         }
         pendingAnchor = null
@@ -391,6 +403,7 @@ fun ChatScreen(
                 wasScrolling = true
                 // 用户（或我们自己的滚动）一旦开始就脱离贴底。
                 follow = followAfterUserScroll()
+                scrollEpoch += 1
                 ChatScrollTrace.record("scroll start follow=false ${listState.snapshot()}")
             } else if (wasScrolling) {
                 wasScrolling = false
@@ -717,15 +730,20 @@ fun ChatScreen(
  * conversation — both "top" and "bottom" appeared to jump to the top for long
  * turns. Scroll by a large delta afterwards; LazyList clamps at the real end.
  *
- * 注意：`scrollToItem` 只强求「最后一项的顶部」对齐，而且它触发的 measure 要到
- * 下一帧才落地。紧接着调 `scrollBy` 会读到**旧布局**（"不能再往下滚"）而一个像素
- * 都不消费，于是停在最后一项的顶部 —— 看起来正是「距底部还差两行」。
- * 所以这里等帧落地、确认还能滚再滚，最多重试几帧。
+ * 关键顺序问题：`scrollToItem` 只强求「最后一项的顶部」对齐，而它触发的 measure
+ * 要等**下一帧的 layout** 之后才生效；在那之前 `canScrollForward` / `scrollBy`
+ * 用的都是**旧位置**的测量结果。跟随状态下旧位置本来就在底部 → 读到 false →
+ * 紧接的 `scrollBy` 一个像素都不消费 → 停在最后一项的顶部（新一轮对话里就是
+ * 用户那条消息，看起来像「跳到了用户信息」）。`withFrameNanos` 回调也排在
+ * layout 之前，所以必须多等一帧才能看到新布局。
  */
 private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToBottom(itemCount: Int) {
     if (itemCount <= 0) return
     scrollToItem(itemCount - 1)
     repeat(3) {
+        // 第 1 个 withFrameNanos 让 scrollToItem 的 remeasure 进入这一帧的 layout，
+        // 第 2 个让出到 layout 之后，此时 canScrollForward / scrollBy 才是新位置的值。
+        withFrameNanos { }
         withFrameNanos { }
         if (!canScrollForward) return
         scrollBy(100_000f)
