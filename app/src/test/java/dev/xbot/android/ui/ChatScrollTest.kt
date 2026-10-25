@@ -117,4 +117,71 @@ class ChatScrollTest {
             shouldPinToBottom(follow = true, loading = false, itemCount = 10, userScrolling = false),
         )
     }
+
+    /**
+     * 回归：remeasure 期间 `visibleItemsInfo` 为空、`canScrollForward` 瞬时变 false，
+     * 这不等于「用户回到底部」。空闲会话里输入区状态栏一渲染就会触发一次 remeasure，
+     * 旧实现因此在没有流式输出时也会把列表拽回底部。
+     */
+    @Test
+    fun `empty layout is never considered at the bottom`() {
+        assertFalse(
+            isSettledAtBottom(
+                totalItemsCount = 0,
+                lastVisibleIndex = 0,
+                lastVisibleEndOffset = 0,
+                viewportEndOffset = 1200,
+                canScrollForward = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `not the last item means not at the bottom`() {
+        assertFalse(
+            isSettledAtBottom(
+                totalItemsCount = 20,
+                lastVisibleIndex = 7,
+                lastVisibleEndOffset = 1200,
+                viewportEndOffset = 1200,
+                canScrollForward = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `still scrollable means not at the bottom`() {
+        assertFalse(
+            isSettledAtBottom(
+                totalItemsCount = 20,
+                lastVisibleIndex = 19,
+                lastVisibleEndOffset = 900,
+                viewportEndOffset = 1200,
+                canScrollForward = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `last item fully inside the viewport is at the bottom`() {
+        assertTrue(
+            isSettledAtBottom(
+                totalItemsCount = 20,
+                lastVisibleIndex = 19,
+                lastVisibleEndOffset = 1200,
+                viewportEndOffset = 1200,
+                canScrollForward = false,
+            ),
+        )
+        // 底部 contentPadding 让最后一项的底边落在可视区之内，也算到底。
+        assertTrue(
+            isSettledAtBottom(
+                totalItemsCount = 20,
+                lastVisibleIndex = 19,
+                lastVisibleEndOffset = 1136,
+                viewportEndOffset = 1200,
+                canScrollForward = false,
+            ),
+        )
+    }
 }

@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -339,9 +338,11 @@ fun ChatScreen(
     }
 
     // Follow the tail only while the user has not taken over the list. Keyed on
-    // `tail` (never on `itemCount`): prepending an older page grows the list but
-    // not the tail, and must not scroll anything.
-    LaunchedEffect(follow, tail, state.loading) {
+    // `tail` alone — *not* on `follow`, and never on `itemCount`:
+    //  - prepending an older page grows the list but not the tail, so it must not scroll;
+    //  - flipping `follow` back to true is not "new content", and treating it as such
+    //    is what made an idle list jump to the bottom on any relayout.
+    LaunchedEffect(tail, state.loading) {
         if (!shouldPinToBottom(follow, state.loading, itemCount, listState.isScrollInProgress)) {
             return@LaunchedEffect
         }
@@ -351,24 +352,26 @@ fun ChatScreen(
         listState.scrollToBottom(itemCount)
     }
 
-    // A real drag means the user is taking over; stop following immediately,
-    // even when the list cannot scroll forward yet (that is exactly the state at
-    // the bottom, where every upward drag starts).
-    val isDragged by listState.interactionSource.collectIsDraggedAsState()
-    LaunchedEffect(isDragged) {
-        if (isDragged) follow = followAfterUserScroll()
-    }
-
-    // Resume following only once the list has settled at the very bottom
-    // (by drag/fling or the bottom button) — never mid-list.
+    // The only thing that may resume following is a **scroll that ended**, i.e. a real
+    // user gesture (or the bottom button) that left the list at the very bottom.
+    //
+    // 不能用 canScrollForward 单独判断「用户回到底部」：remeasure 期间它会瞬时变成
+    // false（输入区状态栏出现/消失、图片加载、窗口 insets 变化都会触发），旧实现因此
+    // 在完全空闲的长会话里也会莫名其妙把人拽回底部。
     LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
-            .collect { (scrolling, canForward) ->
-                follow = followAfterSettle(
-                    follow = follow,
-                    atBottom = !scrolling && !canForward,
-                )
+        var wasScrolling = false
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (scrolling) {
+                wasScrolling = true
+                // 用户（或我们自己的滚动）一旦开始就脱离贴底。
+                follow = followAfterUserScroll()
+            } else if (wasScrolling) {
+                wasScrolling = false
+                if (listState.isSettledAtBottom()) {
+                    follow = followAfterSettle(follow = follow, atBottom = true)
+                }
             }
+        }
     }
 
     Scaffold(
@@ -691,6 +694,22 @@ private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToBotto
     if (itemCount <= 0) return
     scrollToItem(itemCount - 1)
     scrollBy(100_000f)
+}
+
+/**
+ * 列表真的停在底部吗？—— 读当前布局，交给纯函数 [isSettledAtBottom] 判断。
+ * `visibleItemsInfo` 为空（布局还没算完 / remeasure 中）一律视为「不在底部」。
+ */
+private fun LazyListState.isSettledAtBottom(): Boolean {
+    val info = layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull() ?: return false
+    return isSettledAtBottom(
+        totalItemsCount = info.totalItemsCount,
+        lastVisibleIndex = last.index,
+        lastVisibleEndOffset = last.offset + last.size,
+        viewportEndOffset = info.viewportEndOffset,
+        canScrollForward = canScrollForward,
+    )
 }
 
 @Composable

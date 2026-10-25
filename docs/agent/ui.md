@@ -31,11 +31,15 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
 - `Scaffold(topBar = TopAppBar, bottomBar = Composer, snackbarHost = ...)`，内容区是 `LazyColumn`。
 - 贴底（auto-follow）逻辑在 `ui/ChatScroll.kt`（纯函数，`ChatScrollTest` 覆盖），ChatScreen 只喂事件：
   - 「尾部指纹」`tailFingerprint()` **不含 `turns.size`**：上滑补页是往前面插入历史，
-    长度变了但尾部没变，用长度判断会把用户拽回底部（0.4.1 修的就是这个）。
-    `LaunchedEffect` 以 `(follow, tail, loading)` 为 key，**绝不能把 `itemCount` 放进 key**。
-  - 只要用户开始拖动（`collectIsDraggedAsState`）就 `follow = false`，**不看 `canScrollForward`**：
-    从底部起手向上拖时列表还「不能向下滚」，旧判断会漏掉，随后补页/流式追加把人拽回底部。
-  - 只有滚动结束且真的停在底部才恢复 `follow`；「跳到顶部」按钮也要显式置 `follow = false`。
+    长度变了但尾部没变，用长度判断会把用户拽回底部（0.4.1 修的）。
+  - `LaunchedEffect` 只以 `(tail, state.loading)` 为 key：**绝不能把 `itemCount` 放进 key**
+    （补页会变），**也不能把 `follow` 放进 key**（`follow` 一变就会滚，等于任何重算都可能把人拽走）。
+  - 别用 `canScrollForward` 推断「用户回到底部」：remeasure 期间它会瞬时变成 `false`
+    （输入区「工作目录 · 上下文」状态栏出现、图片加载、insets 变化都会触发），
+    旧实现据此把 `follow` 置回 true，空闲会话照样跳底部（0.4.2 修的）。
+    现在只有 `isScrollInProgress` 由 true→false（一次滚动真的结束）且 `isSettledAtBottom()`
+    （布局非空 + 最后一项就是末尾 + 底边在可视区内）才能恢复 `follow`。
+  - 滚动一开始就 `follow = false`，不看此刻能否向下滚；「跳到顶部」按钮显式置 `false`。
   - 贴底滚动前先等 `isScrollInProgress == false`，别和用户手势抢 `LazyListState`。
 - 历史补页靠边界触发（`isScrollInProgress to firstVisibleItemIndex` + `pendingAnchor` 还原位置），
   不要用 `LaunchedEffect(Unit)` 一次性补页。

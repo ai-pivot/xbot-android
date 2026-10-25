@@ -57,6 +57,28 @@ internal fun followAfterUserScroll(): Boolean = false
 internal fun followAfterSettle(follow: Boolean, atBottom: Boolean): Boolean = follow || atBottom
 
 /**
+ * 列表是否**真的**停在最底部。
+ *
+ * 不能只看 `canScrollForward`：布局还没算完（`visibleItemsInfo` 为空）、尺寸变化后的
+ * 一次 remeasure 都会让它瞬时变成 false。把它单独当成「用户回到底部」，就会在完全
+ * 空闲的会话里被莫名其妙拽回底部 —— 输入区的「工作目录 · 上下文」状态栏一出现
+ * （它改变可视区高度、触发 remeasure）就能触发一次。
+ *
+ * 因此同时要求：布局非空、最后一项就是列表末尾、且它的底边落在可视区内。
+ */
+internal fun isSettledAtBottom(
+    totalItemsCount: Int,
+    lastVisibleIndex: Int,
+    lastVisibleEndOffset: Int,
+    viewportEndOffset: Int,
+    canScrollForward: Boolean,
+): Boolean {
+    if (totalItemsCount <= 0) return false
+    if (lastVisibleIndex != totalItemsCount - 1) return false
+    return !canScrollForward && lastVisibleEndOffset <= viewportEndOffset
+}
+
+/**
  * 现在是否应该把列表滚到最底部。
  *
  * [userScrolling] 为 true 时不动列表：贴底滚动和用户手势抢 [androidx.compose.foundation.lazy.LazyListState]
