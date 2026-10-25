@@ -47,7 +47,11 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
     一个像素都不消费 —— 停在最后一项顶部。新一轮对话里 TurnBlock 的开头正是用户气泡，
     所以症状会表现为「跳到了用户那条消息」。`withFrameNanos` 回调也排在 layout 之前，
     必须**等两帧**再判断/再滚（见 `scrollToBottom`）。
-  - 上滑补页的锚点恢复带 `scrollEpoch` 保护：请求发出后用户又滚过就不再拽回旧锚点。
+  - 上滑补页的锚点恢复只在「列表仍停在请求那一刻的位置」时纠正索引
+    （`shouldRestoreAnchor`：offset 未变 + 期间没有新滚动 + 索引真的变了）。
+    少了这个守卫，补页回来会把已经贴底/被用户滑走的列表拽回请求时的位置 ——
+    0.4.5 之前就是这个把视图送到「某条用户消息」上。带 key 的 LazyColumn 前插时
+    本来就按 key 锚住可见项，跳过恢复是安全的。
   - 跟随尾部要用**单个长生命周期 collector**（`snapshotFlow { tail }` 在
     `LaunchedEffect(listState)` 里），不要用以 `tail` 为 key 的 `LaunchedEffect`：
     后者每次尾部变化都取消上一次协程，滚动做到一半被取消就又停到最后一项顶部。

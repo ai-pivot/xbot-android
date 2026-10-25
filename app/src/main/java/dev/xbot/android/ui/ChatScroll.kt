@@ -79,6 +79,21 @@ internal fun isSettledAtBottom(
 }
 
 /**
+ * 补页锚点恢复是否需要（且可以）纠正索引。
+ *
+ * 只有列表**仍停在补页请求那一刻的位置**（同一滚动纪元、firstVisibleItemScrollOffset
+ * 未变）才允许纠正，否则会把已经被用户滑走 / 贴底滚动带走的列表拽回旧位置 ——
+ * 表现就是「跳到了某条用户消息」。索引没变时也不用动。
+ */
+internal fun shouldRestoreAnchor(
+    anchorOffset: Int,
+    currentOffset: Int,
+    sameEpoch: Boolean,
+    currentIndex: Int,
+    targetIndex: Int,
+): Boolean = sameEpoch && anchorOffset == currentOffset && currentIndex != targetIndex
+
+/**
  * 现在是否应该把列表滚到最底部。
  *
  * [userScrolling] 为 true 时不动列表：贴底滚动和用户手势抢 [androidx.compose.foundation.lazy.LazyListState]

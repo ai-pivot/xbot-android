@@ -100,6 +100,50 @@ class ChatScrollTest {
     }
 
     @Test
+    fun `anchor is only restored when the list still sits where the request was made`() {
+        // 停在原位、索引因为前插变了 → 需要并允许纠正。
+        assertTrue(
+            shouldRestoreAnchor(
+                anchorOffset = 0,
+                currentOffset = 0,
+                sameEpoch = true,
+                currentIndex = 41,
+                targetIndex = 42,
+            ),
+        )
+        // 用户/贴底滚动已经把列表带走（offset 不同）→ 绝不能拽回去。
+        assertFalse(
+            shouldRestoreAnchor(
+                anchorOffset = 0,
+                currentOffset = 6378,
+                sameEpoch = true,
+                currentIndex = 2,
+                targetIndex = 2,
+            ),
+        )
+        // 期间发生过新的滚动 → 同样不还原。
+        assertFalse(
+            shouldRestoreAnchor(
+                anchorOffset = 0,
+                currentOffset = 0,
+                sameEpoch = false,
+                currentIndex = 41,
+                targetIndex = 42,
+            ),
+        )
+        // 索引没变 → 不需要动。
+        assertFalse(
+            shouldRestoreAnchor(
+                anchorOffset = 0,
+                currentOffset = 0,
+                sameEpoch = true,
+                currentIndex = 42,
+                targetIndex = 42,
+            ),
+        )
+    }
+
+    @Test
     fun `never pin while the user is scrolling`() {
         assertFalse(
             shouldPinToBottom(follow = true, loading = false, itemCount = 10, userScrolling = true),

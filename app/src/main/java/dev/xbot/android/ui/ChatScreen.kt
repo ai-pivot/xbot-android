@@ -196,18 +196,33 @@ fun ChatScreen(
             if (!state.hasMore) pendingAnchor = null
             return@LaunchedEffect
         }
-        // 补页期间用户又自己滚过：别把位置硬拽回旧锚点（那会看起来像「跳到某条用户消息」）。
-        // 带 key 的 LazyColumn 在前插时本来就会按 key 锚住可见项，这里跳过是安全的。
-        if (anchor.epoch != scrollEpoch) {
-            ChatScrollTrace.record("anchor skip (user scrolled) ${listState.snapshot()}")
+        // 只有列表**仍停在补页请求那一刻的位置**才需要纠正索引：
+        // 用 scrollToItem(新索引, 旧 offset) 强行「还原」会把已经滚到别处（比如进入
+        // 会话自动贴底之后、或者用户自己滑走之后）的列表拽回旧位置 —— 表现就是
+        // 「跳到了某条用户消息」。带 key 的 LazyColumn 在前插时本来就按 key 锚住
+        // 可见项，跳过恢复是安全的。
+        val moved = anchor.epoch != scrollEpoch ||
+            listState.firstVisibleItemScrollOffset != anchor.offset
+        if (moved) {
+            ChatScrollTrace.record("anchor skip (moved) ${listState.snapshot()}")
             pendingAnchor = null
             return@LaunchedEffect
         }
+        val offsetRow = if (state.hasMore) 1 else 0
         val index = state.turns.indexOfFirst { it.turnId == anchor.turnId }
         if (index >= 0) {
-            val offsetRow = if (state.hasMore) 1 else 0
-            ChatScrollTrace.record("anchor restore turn=${anchor.turnId} idx=$index ${listState.snapshot()}")
-            listState.scrollToItem(index + offsetRow, anchor.offset)
+            val target = index + offsetRow
+            if (shouldRestoreAnchor(
+                    anchorOffset = anchor.offset,
+                    currentOffset = listState.firstVisibleItemScrollOffset,
+                    sameEpoch = anchor.epoch == scrollEpoch,
+                    currentIndex = listState.firstVisibleItemIndex,
+                    targetIndex = target,
+                )
+            ) {
+                ChatScrollTrace.record("anchor restore turn=${anchor.turnId} idx=$target ${listState.snapshot()}")
+                listState.scrollToItem(target, anchor.offset)
+            }
         }
         pendingAnchor = null
     }
