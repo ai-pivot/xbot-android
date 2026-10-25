@@ -322,14 +322,11 @@ fun ChatScreen(
         derivedStateOf { listState.canScrollForward }
     }
 
-    // Changes whenever the visible tail grows: streamed text, reasoning, tool
-    // status/output, a new iteration/turn, or the optimistic pending message.
-    val followVersion = (state.turns.size.toLong() * 1_000_000L) +
-        (lastIteration?.content?.length ?: 0) +
-        (lastIteration?.reasoning?.length ?: 0) +
-        (lastTurn?.finalText?.length ?: 0) +
-        (lastIteration?.tools?.hashCode() ?: 0) +
-        (state.pendingUserText?.length ?: 0)
+    // Changes only when the *tail* of the conversation grows: streamed text,
+    // reasoning, tool status/output, a new iteration/turn, or the optimistic
+    // pending message. Prepending an older page must NOT change it, otherwise
+    // "load more" yanks the list back to the bottom (see ChatScroll.kt).
+    val tail = state.tailFingerprint(showThinking)
 
     // Entering a session must land directly at the newest message, without
     // animating through the whole history.
@@ -341,27 +338,37 @@ fun ChatScreen(
         }
     }
 
-    // Follow streaming output only while the user has not scrolled away.
-    LaunchedEffect(followVersion, follow, itemCount) {
-        if (follow && !state.loading && itemCount > 0) {
-            listState.scrollToBottom(itemCount)
+    // Follow the tail only while the user has not taken over the list. Keyed on
+    // `tail` (never on `itemCount`): prepending an older page grows the list but
+    // not the tail, and must not scroll anything.
+    LaunchedEffect(follow, tail, state.loading) {
+        if (!shouldPinToBottom(follow, state.loading, itemCount, listState.isScrollInProgress)) {
+            return@LaunchedEffect
         }
+        // Let an in-flight drag/fling settle first, otherwise a programmatic
+        // scroll fights the gesture and the position jumps.
+        snapshotFlow { listState.isScrollInProgress }.first { !it }
+        listState.scrollToBottom(itemCount)
     }
 
-    // A real drag means the user is taking over; stop following immediately.
+    // A real drag means the user is taking over; stop following immediately,
+    // even when the list cannot scroll forward yet (that is exactly the state at
+    // the bottom, where every upward drag starts).
     val isDragged by listState.interactionSource.collectIsDraggedAsState()
     LaunchedEffect(isDragged) {
-        if (isDragged && listState.canScrollForward) {
-            follow = false
-        }
+        if (isDragged) follow = followAfterUserScroll()
     }
 
-    // If the user returns to the bottom (by drag/fling or the bottom button),
-    // resume following.
+    // Resume following only once the list has settled at the very bottom
+    // (by drag/fling or the bottom button) — never mid-list.
     LaunchedEffect(listState) {
-        snapshotFlow { listState.canScrollForward }.collect { canForward ->
-            if (!canForward) follow = true
-        }
+        snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
+            .collect { (scrolling, canForward) ->
+                follow = followAfterSettle(
+                    follow = follow,
+                    atBottom = !scrolling && !canForward,
+                )
+            }
     }
 
     Scaffold(
@@ -587,6 +594,8 @@ fun ChatScreen(
                 if (canScrollBackward) {
                     SmallFloatingActionButton(
                         onClick = {
+                            // 明确要离开底部：不然流式输出会立刻把人拽回去。
+                            follow = false
                             scope.launch { listState.scrollToItem(0) }
                         },
                         containerColor = MaterialTheme.colorScheme.surface,

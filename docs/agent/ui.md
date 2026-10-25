@@ -29,8 +29,16 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
 ## 聊天页结构（ui/ChatScreen.kt）
 
 - `Scaffold(topBar = TopAppBar, bottomBar = Composer, snackbarHost = ...)`，内容区是 `LazyColumn`。
-- 跟随底部逻辑：用户上滑（`collectIsDraggedAsState` + `canScrollForward`）时关掉 `follow`，
-  回到底部（`canScrollForward == false`）时重新开启；历史补页靠边界触发，不要用 `LaunchedEffect(Unit)` 一次性补页。
+- 贴底（auto-follow）逻辑在 `ui/ChatScroll.kt`（纯函数，`ChatScrollTest` 覆盖），ChatScreen 只喂事件：
+  - 「尾部指纹」`tailFingerprint()` **不含 `turns.size`**：上滑补页是往前面插入历史，
+    长度变了但尾部没变，用长度判断会把用户拽回底部（0.4.1 修的就是这个）。
+    `LaunchedEffect` 以 `(follow, tail, loading)` 为 key，**绝不能把 `itemCount` 放进 key**。
+  - 只要用户开始拖动（`collectIsDraggedAsState`）就 `follow = false`，**不看 `canScrollForward`**：
+    从底部起手向上拖时列表还「不能向下滚」，旧判断会漏掉，随后补页/流式追加把人拽回底部。
+  - 只有滚动结束且真的停在底部才恢复 `follow`；「跳到顶部」按钮也要显式置 `follow = false`。
+  - 贴底滚动前先等 `isScrollInProgress == false`，别和用户手势抢 `LazyListState`。
+- 历史补页靠边界触发（`isScrollInProgress to firstVisibleItemIndex` + `pendingAnchor` 还原位置），
+  不要用 `LaunchedEffect(Unit)` 一次性补页。
 - Markdown / 表格 / Mermaid / 图片分别由 `ui/components/MarkdownText.kt`、`MermaidView.kt`、
   `MarkdownImage.kt` 负责，图片 URL 会经 `ImageUrl.kt` 把 `localhost` 重写成 `AppPrefs.mediaBaseUrl`。
 
