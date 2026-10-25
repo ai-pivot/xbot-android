@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -60,6 +59,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -102,6 +102,7 @@ private data class PrependAnchor(
     val turnId: Long,
     val offset: Int,
     val requestedOldestId: Long,
+    val epoch: Int,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -131,6 +132,8 @@ fun ChatScreen(
     // new scroll gesture starts; it is independent from the short-list backfill.
     var loadMoreGestureConsumed by remember(chatId) { mutableStateOf(false) }
     var pendingAnchor by remember(chatId) { mutableStateOf<PrependAnchor?>(null) }
+    // 每次滚动开始 +1：补页回来时如果用户又动过列表，就别再把人拽回旧锚点。
+    var scrollEpoch by remember(chatId) { mutableStateOf(0) }
     val latestState by rememberUpdatedState(state)
 
     fun requestLoadMore() {
@@ -145,6 +148,7 @@ fun ChatScreen(
                 turnId = it.turnId,
                 offset = listState.firstVisibleItemScrollOffset,
                 requestedOldestId = s.oldestId,
+                epoch = scrollEpoch,
             )
         }
         vm.loadMore()
@@ -192,10 +196,33 @@ fun ChatScreen(
             if (!state.hasMore) pendingAnchor = null
             return@LaunchedEffect
         }
+        // 只有列表**仍停在补页请求那一刻的位置**才需要纠正索引：
+        // 用 scrollToItem(新索引, 旧 offset) 强行「还原」会把已经滚到别处（比如进入
+        // 会话自动贴底之后、或者用户自己滑走之后）的列表拽回旧位置 —— 表现就是
+        // 「跳到了某条用户消息」。带 key 的 LazyColumn 在前插时本来就按 key 锚住
+        // 可见项，跳过恢复是安全的。
+        val moved = anchor.epoch != scrollEpoch ||
+            listState.firstVisibleItemScrollOffset != anchor.offset
+        if (moved) {
+            ChatScrollTrace.record("anchor skip (moved) ${listState.snapshot()}")
+            pendingAnchor = null
+            return@LaunchedEffect
+        }
+        val offsetRow = if (state.hasMore) 1 else 0
         val index = state.turns.indexOfFirst { it.turnId == anchor.turnId }
         if (index >= 0) {
-            val offsetRow = if (state.hasMore) 1 else 0
-            listState.scrollToItem(index + offsetRow, anchor.offset)
+            val target = index + offsetRow
+            if (shouldRestoreAnchor(
+                    anchorOffset = anchor.offset,
+                    currentOffset = listState.firstVisibleItemScrollOffset,
+                    sameEpoch = anchor.epoch == scrollEpoch,
+                    currentIndex = listState.firstVisibleItemIndex,
+                    targetIndex = target,
+                )
+            ) {
+                ChatScrollTrace.record("anchor restore turn=${anchor.turnId} idx=$target ${listState.snapshot()}")
+                listState.scrollToItem(target, anchor.offset)
+            }
         }
         pendingAnchor = null
     }
@@ -322,45 +349,83 @@ fun ChatScreen(
         derivedStateOf { listState.canScrollForward }
     }
 
-    // Changes whenever the visible tail grows: streamed text, reasoning, tool
-    // status/output, a new iteration/turn, or the optimistic pending message.
-    val followVersion = (state.turns.size.toLong() * 1_000_000L) +
-        (lastIteration?.content?.length ?: 0) +
-        (lastIteration?.reasoning?.length ?: 0) +
-        (lastTurn?.finalText?.length ?: 0) +
-        (lastIteration?.tools?.hashCode() ?: 0) +
-        (state.pendingUserText?.length ?: 0)
+    // 会话「尾部指纹」：只在尾部内容增长时变化（流式文本、推理、工具状态、新回合、
+    // 待发送气泡）。上滑补页是往前面插入历史，不改变它 —— 见 ChatScroll.kt。
 
     // Entering a session must land directly at the newest message, without
     // animating through the whole history.
     LaunchedEffect(state.loading, itemCount) {
         if (!state.loading && itemCount > 0 && !didInitialScroll) {
+            ChatScrollTrace.record("init pin count=$itemCount ${listState.snapshot()}")
             listState.scrollToBottom(itemCount)
             didInitialScroll = true
             follow = true
+            ChatScrollTrace.record("init pin done ${listState.snapshot()}")
         }
     }
 
-    // Follow streaming output only while the user has not scrolled away.
-    LaunchedEffect(followVersion, follow, itemCount) {
-        if (follow && !state.loading && itemCount > 0) {
-            listState.scrollToBottom(itemCount)
-        }
-    }
+    // Follow the tail only while the user has not taken over the list.
+    //
+    // 单个长生命周期 collector，而不是以 `tail` 为 key 的 LaunchedEffect：
+    // 后者每次 tail 变化都会取消上一次协程，滚动做到一半被取消就会停在
+    // 「最后一项的顶部」（看起来正是「距底部还差两行」）。
+    // 这里也绝不把 `itemCount` / `follow` 当触发条件：补页会让前者变，布局重算
+    // 会让后者被误置，两者都不是「有新内容」。
+    val latestFollow by rememberUpdatedState(follow)
+    val latestItemCount by rememberUpdatedState(itemCount)
+    val latestThinking by rememberUpdatedState(showThinking)
 
-    // A real drag means the user is taking over; stop following immediately.
-    val isDragged by listState.interactionSource.collectIsDraggedAsState()
-    LaunchedEffect(isDragged) {
-        if (isDragged && listState.canScrollForward) {
-            follow = false
-        }
-    }
-
-    // If the user returns to the bottom (by drag/fling or the bottom button),
-    // resume following.
     LaunchedEffect(listState) {
-        snapshotFlow { listState.canScrollForward }.collect { canForward ->
-            if (!canForward) follow = true
+        var firstEmission = true
+        snapshotFlow { latestState.tailFingerprint(latestThinking) }.collect {
+            // 首次进入会话的贴底交给上面的 init effect，这里只跟后续增量。
+            if (firstEmission) {
+                firstEmission = false
+                return@collect
+            }
+            if (!shouldPinToBottom(
+                    follow = latestFollow,
+                    loading = latestState.loading,
+                    itemCount = latestItemCount,
+                    userScrolling = listState.isScrollInProgress,
+                )
+            ) {
+                ChatScrollTrace.record("pin skip follow=${latestFollow} loading=${latestState.loading} ${listState.snapshot()}")
+                return@collect
+            }
+            // 等用户手势/惯性结束再贴底，别和手势抢 LazyListState。
+            snapshotFlow { listState.isScrollInProgress }.first { !it }
+            if (!latestFollow) {
+                ChatScrollTrace.record("pin abort follow=false ${listState.snapshot()}")
+                return@collect
+            }
+            ChatScrollTrace.record("pin start count=${latestItemCount} ${listState.snapshot()}")
+            listState.scrollToBottom(latestItemCount)
+            ChatScrollTrace.record("pin done ${listState.snapshot()}")
+        }
+    }
+
+    // The only thing that may resume following is a **scroll that ended**, i.e. a real
+    // user gesture (or the bottom button) that left the list at the very bottom.
+    //
+    // 不能用 canScrollForward 单独判断「用户回到底部」：remeasure 期间它会瞬时变成
+    // false（输入区状态栏出现/消失、图片加载、窗口 insets 变化都会触发），旧实现因此
+    // 在完全空闲的长会话里也会莫名其妙把人拽回底部。
+    LaunchedEffect(listState) {
+        var wasScrolling = false
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (scrolling) {
+                wasScrolling = true
+                // 用户（或我们自己的滚动）一旦开始就脱离贴底。
+                follow = followAfterUserScroll()
+                scrollEpoch += 1
+                ChatScrollTrace.record("scroll start follow=false ${listState.snapshot()}")
+            } else if (wasScrolling) {
+                wasScrolling = false
+                val atBottom = listState.isSettledAtBottom()
+                if (atBottom) follow = followAfterSettle(follow = follow, atBottom = true)
+                ChatScrollTrace.record("scroll end atBottom=$atBottom follow=$follow ${listState.snapshot()}")
+            }
         }
     }
 
@@ -587,6 +652,8 @@ fun ChatScreen(
                 if (canScrollBackward) {
                     SmallFloatingActionButton(
                         onClick = {
+                            // 明确要离开底部：不然流式输出会立刻把人拽回去。
+                            follow = false
                             scope.launch { listState.scrollToItem(0) }
                         },
                         containerColor = MaterialTheme.colorScheme.surface,
@@ -677,11 +744,51 @@ fun ChatScreen(
  * taller than the viewport (many iterations), so that is not the bottom of the
  * conversation — both "top" and "bottom" appeared to jump to the top for long
  * turns. Scroll by a large delta afterwards; LazyList clamps at the real end.
+ *
+ * 关键顺序问题：`scrollToItem` 只强求「最后一项的顶部」对齐，而它触发的 measure
+ * 要等**下一帧的 layout** 之后才生效；在那之前 `canScrollForward` / `scrollBy`
+ * 用的都是**旧位置**的测量结果。跟随状态下旧位置本来就在底部 → 读到 false →
+ * 紧接的 `scrollBy` 一个像素都不消费 → 停在最后一项的顶部（新一轮对话里就是
+ * 用户那条消息，看起来像「跳到了用户信息」）。`withFrameNanos` 回调也排在
+ * layout 之前，所以必须多等一帧才能看到新布局。
  */
 private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToBottom(itemCount: Int) {
     if (itemCount <= 0) return
     scrollToItem(itemCount - 1)
-    scrollBy(100_000f)
+    repeat(3) {
+        // 第 1 个 withFrameNanos 让 scrollToItem 的 remeasure 进入这一帧的 layout，
+        // 第 2 个让出到 layout 之后，此时 canScrollForward / scrollBy 才是新位置的值。
+        withFrameNanos { }
+        withFrameNanos { }
+        if (!canScrollForward) return
+        scrollBy(100_000f)
+    }
+}
+
+/** 诊断用：当前列表的布局快照。 */
+private fun androidx.compose.foundation.lazy.LazyListState.snapshot(): String {
+    val info = layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull()
+    return "first=$firstVisibleItemIndex/$firstVisibleItemScrollOffset " +
+        "total=${info.totalItemsCount} last=${last?.index ?: -1} " +
+        "lastEnd=${last?.let { it.offset + it.size } ?: -1} vpEnd=${info.viewportEndOffset} " +
+        "canFwd=$canScrollForward scrolling=$isScrollInProgress"
+}
+
+/**
+ * 列表真的停在底部吗？—— 读当前布局，交给纯函数 [isSettledAtBottom] 判断。
+ * `visibleItemsInfo` 为空（布局还没算完 / remeasure 中）一律视为「不在底部」。
+ */
+private fun LazyListState.isSettledAtBottom(): Boolean {
+    val info = layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull() ?: return false
+    return isSettledAtBottom(
+        totalItemsCount = info.totalItemsCount,
+        lastVisibleIndex = last.index,
+        lastVisibleEndOffset = last.offset + last.size,
+        viewportEndOffset = info.viewportEndOffset,
+        canScrollForward = canScrollForward,
+    )
 }
 
 @Composable

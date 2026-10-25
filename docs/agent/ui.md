@@ -29,8 +29,36 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
 ## 聊天页结构（ui/ChatScreen.kt）
 
 - `Scaffold(topBar = TopAppBar, bottomBar = Composer, snackbarHost = ...)`，内容区是 `LazyColumn`。
-- 跟随底部逻辑：用户上滑（`collectIsDraggedAsState` + `canScrollForward`）时关掉 `follow`，
-  回到底部（`canScrollForward == false`）时重新开启；历史补页靠边界触发，不要用 `LaunchedEffect(Unit)` 一次性补页。
+- 贴底（auto-follow）逻辑在 `ui/ChatScroll.kt`（纯函数，`ChatScrollTest` 覆盖），ChatScreen 只喂事件：
+  - 「尾部指纹」`tailFingerprint()` **不含 `turns.size`**：上滑补页是往前面插入历史，
+    长度变了但尾部没变，用长度判断会把用户拽回底部（0.4.1 修的）。
+  - `LaunchedEffect` 只以 `(tail, state.loading)` 为 key：**绝不能把 `itemCount` 放进 key**
+    （补页会变），**也不能把 `follow` 放进 key**（`follow` 一变就会滚，等于任何重算都可能把人拽走）。
+  - 别用 `canScrollForward` 推断「用户回到底部」：remeasure 期间它会瞬时变成 `false`
+    （输入区「工作目录 · 上下文」状态栏出现、图片加载、insets 变化都会触发），
+    旧实现据此把 `follow` 置回 true，空闲会话照样跳底部（0.4.2 修的）。
+    现在只有 `isScrollInProgress` 由 true→false（一次滚动真的结束）且 `isSettledAtBottom()`
+    （布局非空 + 最后一项就是末尾 + 底边在可视区内）才能恢复 `follow`。
+  - 滚动一开始就 `follow = false`，不看此刻能否向下滚；「跳到顶部」按钮显式置 `false`。
+  - 贴底滚动前先等 `isScrollInProgress == false`，别和用户手势抢 `LazyListState`。
+  - **`scrollToItem(last)` 不是「到底部」**：它只把最后一项的**顶部**对齐，而它触发的
+    measure 要到**下一帧的 layout 之后**才生效；在那之前 `canScrollForward` / `scrollBy`
+    用的还是旧位置的测量结果（跟随状态下旧位置就在底部 → 读到 false），于是 `scrollBy`
+    一个像素都不消费 —— 停在最后一项顶部。新一轮对话里 TurnBlock 的开头正是用户气泡，
+    所以症状会表现为「跳到了用户那条消息」。`withFrameNanos` 回调也排在 layout 之前，
+    必须**等两帧**再判断/再滚（见 `scrollToBottom`）。
+  - 上滑补页的锚点恢复只在「列表仍停在请求那一刻的位置」时纠正索引
+    （`shouldRestoreAnchor`：offset 未变 + 期间没有新滚动 + 索引真的变了）。
+    少了这个守卫，补页回来会把已经贴底/被用户滑走的列表拽回请求时的位置 ——
+    0.4.5 之前就是这个把视图送到「某条用户消息」上。带 key 的 LazyColumn 前插时
+    本来就按 key 锚住可见项，跳过恢复是安全的。
+  - 跟随尾部要用**单个长生命周期 collector**（`snapshotFlow { tail }` 在
+    `LaunchedEffect(listState)` 里），不要用以 `tail` 为 key 的 `LaunchedEffect`：
+    后者每次尾部变化都取消上一次协程，滚动做到一半被取消就又停到最后一项顶部。
+  - 复现类问题用设置 → 滚动诊断（`ui/ChatScrollTrace.kt`）：环形记录最近 200 条滚动事件
+    与布局快照，也能从 logcat 标签 `ChatScroll` 取。
+- 历史补页靠边界触发（`isScrollInProgress to firstVisibleItemIndex` + `pendingAnchor` 还原位置），
+  不要用 `LaunchedEffect(Unit)` 一次性补页。
 - Markdown / 表格 / Mermaid / 图片分别由 `ui/components/MarkdownText.kt`、`MermaidView.kt`、
   `MarkdownImage.kt` 负责，图片 URL 会经 `ImageUrl.kt` 把 `localhost` 重写成 `AppPrefs.mediaBaseUrl`。
 
