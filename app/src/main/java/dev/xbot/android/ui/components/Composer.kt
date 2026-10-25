@@ -19,9 +19,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +44,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.xbot.android.chat.ContextBudgetUi
 
+/** 输入区里一个附件 chip 的展示状态（由 ChatScreen 的附件状态机投影而来）。 */
+data class AttachmentChip(
+    val name: String,
+    val uploading: Boolean = false,
+    val failed: String? = null,
+)
+
 /**
  * 底部输入区。
  *
@@ -54,10 +63,12 @@ fun Composer(
     text: String,
     onTextChange: (String) -> Unit,
     busy: Boolean,
-    attachments: List<String> = emptyList(),
+    attachments: List<AttachmentChip> = emptyList(),
     uploadingLabel: String? = null,
+    attachmentsReady: Boolean = true,
     onPickAttachment: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
+    onRetryAttachment: (Int) -> Unit = {},
     onSend: () -> Unit,
     onCancel: () -> Unit,
     sending: Boolean = false,
@@ -65,6 +76,8 @@ fun Composer(
     cwd: String = "",
 ) {
     var showBudget by remember { mutableStateOf(false) }
+    // 有附件时允许只发附件；但附件还在上传/失败时不能发（否则会被静默丢掉）。
+    val canSend = (text.isNotBlank() || attachments.isNotEmpty()) && !sending && attachmentsReady
 
     Surface(
         tonalElevation = 3.dp,
@@ -84,28 +97,63 @@ fun Composer(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    attachments.forEachIndexed { index, name ->
+                    attachments.forEachIndexed { index, chip ->
                         AssistChip(
                             onClick = {},
                             label = {
                                 Text(
-                                    name,
+                                    chip.name,
                                     style = MaterialTheme.typography.labelMedium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
+                                    color = if (chip.failed != null) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        Color.Unspecified
+                                    },
                                     modifier = Modifier.widthIn(max = 150.dp),
                                 )
                             },
                             trailingIcon = {
-                                IconButton(
-                                    onClick = { onRemoveAttachment(index) },
-                                    modifier = Modifier.size(20.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Close,
-                                        contentDescription = "移除附件 $name",
+                                when {
+                                    chip.uploading -> CircularProgressIndicator(
                                         modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
                                     )
+
+                                    chip.failed != null -> Row {
+                                        IconButton(
+                                            onClick = { onRetryAttachment(index) },
+                                            modifier = Modifier.size(20.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Refresh,
+                                                contentDescription = "重新上传 ${chip.name}",
+                                                modifier = Modifier.size(14.dp),
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { onRemoveAttachment(index) },
+                                            modifier = Modifier.size(20.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Close,
+                                                contentDescription = "移除附件 ${chip.name}",
+                                                modifier = Modifier.size(14.dp),
+                                            )
+                                        }
+                                    }
+
+                                    else -> IconButton(
+                                        onClick = { onRemoveAttachment(index) },
+                                        modifier = Modifier.size(20.dp),
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Close,
+                                            contentDescription = "移除附件 ${chip.name}",
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                    }
                                 }
                             },
                         )
@@ -172,8 +220,8 @@ fun Composer(
                 CompactIconButton(
                     icon = Icons.AutoMirrored.Filled.Send,
                     description = "发送",
-                    enabled = text.isNotBlank() && !sending,
-                    tint = if (text.isNotBlank()) {
+                    enabled = canSend,
+                    tint = if (canSend) {
                         MaterialTheme.colorScheme.primary
                     } else {
                         MaterialTheme.colorScheme.outline

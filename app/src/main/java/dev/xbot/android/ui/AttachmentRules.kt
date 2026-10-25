@@ -12,6 +12,23 @@ internal const val MAX_ATTACHMENTS = 5
  */
 internal const val MAX_ATTACHMENT_BYTES = 10L * 1024 * 1024
 
+/** 单个附件的上传状态：选中即开始上传，发送时只带 [Done] 的。 */
+internal sealed interface AttachmentState {
+    data object Queued : AttachmentState
+    data object Uploading : AttachmentState
+    data class Done(val uploadKey: String) : AttachmentState
+    data class Failed(val reason: String) : AttachmentState
+}
+
+/**
+ * 现在能不能发。
+ *
+ * 必须每个附件都已 [AttachmentState.Done]：还有在上传的会让「点发送」没反应，
+ * 有失败的则会被静默丢掉 —— 这两种都该让用户先处理（重试/移除）。
+ */
+internal fun attachmentsReady(states: List<AttachmentState>): Boolean =
+    states.all { it is AttachmentState.Done }
+
 /** 待校验的候选附件；只保留校验需要的字段，方便纯 JVM 单测。 */
 internal data class AttachmentPick(val name: String, val size: Long)
 

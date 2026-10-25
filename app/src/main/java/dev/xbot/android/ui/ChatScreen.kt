@@ -79,6 +79,7 @@ import dev.xbot.android.data.ModelEntry
 import dev.xbot.android.data.RewindResponse
 import dev.xbot.android.data.SessionModel
 import dev.xbot.android.ui.components.AskUserDialog
+import dev.xbot.android.ui.components.AttachmentChip
 import dev.xbot.android.ui.components.AutoLinkText
 import dev.xbot.android.ui.components.Composer
 import dev.xbot.android.ui.components.CopyOrSelectText
@@ -88,6 +89,8 @@ import dev.xbot.android.ui.components.RewindDialog
 import dev.xbot.android.ui.components.ToolCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
@@ -96,6 +99,7 @@ private data class PendingAttachment(
     val name: String,
     val mime: String,
     val size: Long,
+    val state: AttachmentState = AttachmentState.Queued,
 )
 
 private data class PrependAnchor(
@@ -230,8 +234,8 @@ fun ChatScreen(
     var input by rememberSaveable(chatId) { mutableStateOf("") }
     var attachments by remember(chatId) { mutableStateOf<List<PendingAttachment>>(emptyList()) }
     var sending by remember(chatId) { mutableStateOf(false) }
-    /** 多附件串行上传时的进度文案（"正在上传 2/3"）；单文件不需要进度条。 */
-    var uploadingLabel by remember(chatId) { mutableStateOf<String?>(null) }
+    // 最多两个附件同时上传，其余的排队等信号量。
+    val uploadSlots = remember(chatId) { Semaphore(2) }
 
     var sessionModel by remember(chatId) { mutableStateOf<SessionModel?>(null) }
     var availableModels by remember(chatId) { mutableStateOf<List<ModelEntry>>(emptyList()) }
@@ -274,6 +278,39 @@ fun ChatScreen(
         }
     }
 
+    fun updateAttachment(uri: Uri, transform: (PendingAttachment) -> PendingAttachment) {
+        attachments = attachments.map { if (it.uri == uri) transform(it) else it }
+    }
+
+    // 选中即上传：上传和「发送」解耦，用户还在打字/挑下一批文件时就已经传完了，
+    // 点发送几乎是瞬发。最多两个并发，避免几个大文件一起抢带宽/内存。
+    fun uploadAttachment(item: PendingAttachment) {
+        updateAttachment(item.uri) { it.copy(state = AttachmentState.Uploading) }
+        scope.launch {
+            runCatching {
+                uploadSlots.withPermit {
+                    app.container.api.uploadFile(
+                        fileName = item.name,
+                        mime = item.mime,
+                        contentLength = item.size,
+                        open = {
+                            context.contentResolver.openInputStream(item.uri)
+                                ?: throw IllegalStateException("无法读取附件 ${item.name}")
+                        },
+                    )
+                }
+            }.onSuccess { response ->
+                updateAttachment(item.uri) {
+                    it.copy(state = AttachmentState.Done(response.uploadKey))
+                }
+            }.onFailure { e ->
+                updateAttachment(item.uri) {
+                    it.copy(state = AttachmentState.Failed(e.message ?: "上传失败"))
+                }
+            }
+        }
+    }
+
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents(),
     ) { uris ->
@@ -299,8 +336,11 @@ fun ChatScreen(
             existingCount = attachments.size,
             picks = fresh.map { AttachmentPick(it.name, it.size) },
         )
-        if (plan.acceptedIndices.isNotEmpty()) {
-            attachments = attachments + plan.acceptedIndices.map { fresh[it] }
+        val accepted = plan.acceptedIndices.map { fresh[it] }
+        if (accepted.isNotEmpty()) {
+            attachments = attachments + accepted
+            // 加进列表后立刻开始传（长按/等待都不需要）。
+            accepted.forEach { uploadAttachment(it) }
         }
         attachmentRejectionMessage(plan.rejected)?.let { scope.launch { snackbar.showSnackbar(it) } }
     }
@@ -309,40 +349,32 @@ fun ChatScreen(
         val text = input.trim()
         val files = attachments
         if (text.isEmpty() && files.isEmpty()) return
+        // 还有附件在上传/排队/失败：不发送，也不静默丢掉它们。
+        val notReady = files.firstOrNull { it.state !is AttachmentState.Done }
+        if (notReady != null) {
+            val reason = when (val s = notReady.state) {
+                is AttachmentState.Failed -> "「${notReady.name}」上传失败，请重试或移除"
+                else -> "「${notReady.name}」还在上传，稍等一下"
+            }
+            scope.launch { snackbar.showSnackbar(reason) }
+            return
+        }
         sending = true
         scope.launch {
             try {
-                val uploadKeys = ArrayList<String>(files.size)
-                val names = ArrayList<String>(files.size)
-                val sizes = ArrayList<Long>(files.size)
-                val mimes = ArrayList<String>(files.size)
-                // 串行上传：逐个读字节、逐个 POST，避免多个大文件同时驻留内存。
-                files.forEachIndexed { index, file ->
-                    if (files.size > 1) uploadingLabel = "正在上传 ${index + 1}/${files.size}"
-                    val bytes = withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(file.uri)?.use { it.readBytes() }
-                    } ?: throw IllegalStateException("无法读取附件 ${file.name}")
-                    val uploaded = app.container.api.uploadFile(bytes, file.name, file.mime)
-                    uploadKeys += uploaded.uploadKey
-                    names += file.name
-                    sizes += file.size
-                    mimes += file.mime
-                }
-                uploadingLabel = null
                 vm.send(
                     text = text,
-                    uploadKeys = uploadKeys,
-                    fileNames = names,
-                    fileSizes = sizes,
-                    fileMimes = mimes,
+                    uploadKeys = files.map { (it.state as AttachmentState.Done).uploadKey },
+                    fileNames = files.map { it.name },
+                    fileSizes = files.map { it.size },
+                    fileMimes = files.map { it.mime },
                 )
                 input = ""
                 attachments = emptyList()
             } catch (e: Exception) {
-                // 失败时保留待发送列表，用户可以直接重试。
+                // 失败时保留附件（已上传的 key 仍然有效），用户可以直接重发。
                 snackbar.showSnackbar(e.message ?: "发送失败")
             } finally {
-                uploadingLabel = null
                 sending = false
             }
         }
@@ -450,6 +482,19 @@ fun ChatScreen(
         }
     }
 
+    val attachmentChips = attachments.map {
+        AttachmentChip(
+            name = it.name,
+            uploading = it.state is AttachmentState.Uploading || it.state is AttachmentState.Queued,
+            failed = (it.state as? AttachmentState.Failed)?.reason,
+        )
+    }
+    val uploadingCount = attachments.count {
+        it.state is AttachmentState.Uploading || it.state is AttachmentState.Queued
+    }
+    // 发送按钮只在「每个附件都已经拿到 uploadKey」时可用：失败/上传中的不能静默丢掉。
+    val canSendAttachments = attachmentsReady(attachments.map { it.state })
+
     Scaffold(
         topBar = {
             Column {
@@ -542,11 +587,15 @@ fun ChatScreen(
                 text = input,
                 onTextChange = { input = it },
                 busy = state.busy,
-                attachments = attachments.map { it.name },
-                uploadingLabel = uploadingLabel,
+                attachments = attachmentChips,
+                uploadingLabel = if (uploadingCount > 0) "正在上传 $uploadingCount 个附件…" else null,
+                attachmentsReady = canSendAttachments,
                 onPickAttachment = { picker.launch("*/*") },
                 onRemoveAttachment = { index ->
                     attachments = attachments.filterIndexed { i, _ -> i != index }
+                },
+                onRetryAttachment = { index ->
+                    attachments.getOrNull(index)?.let { uploadAttachment(it) }
                 },
                 onSend = { submit() },
                 onCancel = vm::cancel,

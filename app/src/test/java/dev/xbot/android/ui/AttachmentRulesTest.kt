@@ -1,6 +1,7 @@
 package dev.xbot.android.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -84,5 +85,18 @@ class AttachmentRulesTest {
 
         assertEquals("已跳过 1 个文件：huge.bin（超过 10MB）", attachmentRejectionMessage(plan.rejected))
         assertNull(attachmentRejectionMessage(emptyList()))
+    }
+
+    @Test
+    fun `send is only allowed once every attachment finished uploading`() {
+        val done = AttachmentState.Done("uploads/1/a.png")
+
+        assertTrue(attachmentsReady(emptyList()))
+        assertTrue(attachmentsReady(listOf(done, AttachmentState.Done("uploads/1/b.png"))))
+        // 还在排队/上传中 → 不能发（否则点发送没反应）。
+        assertFalse(attachmentsReady(listOf(done, AttachmentState.Queued)))
+        assertFalse(attachmentsReady(listOf(done, AttachmentState.Uploading)))
+        // 上传失败 → 也不能发，否则那个文件被静默丢掉。
+        assertFalse(attachmentsReady(listOf(done, AttachmentState.Failed("network"))))
     }
 }

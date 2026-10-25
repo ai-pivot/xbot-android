@@ -17,7 +17,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
+import okio.source
+import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
 /**
@@ -229,18 +233,33 @@ class XbotApi(private val prefs: AppPrefs) {
         execute(post("/api/ask_user/respond", body))
     }
 
+    /**
+     * 上传单个附件（**流式**）。
+     *
+     * 用 [open] 打开数据流直接写进请求体，不再先 `readBytes()` 整个文件 —— 多附件
+     * （最多 5 × 10MB）时峰值内存从「所有文件之和」降到单次缓冲大小。
+     *
+     * [contentLength] 必须是真实字节数：服务端用 `MaxBytesReader` 卡 10MB，
+     * 长度未知（chunked）会被直接拒绝。
+     */
     suspend fun uploadFile(
-        bytes: ByteArray,
         fileName: String,
         mime: String,
+        contentLength: Long,
+        open: () -> InputStream,
     ): UploadResponse {
+        val fileBody = object : RequestBody() {
+            override fun contentType() = mime.toMediaType()
+
+            override fun contentLength() = contentLength
+
+            override fun writeTo(sink: BufferedSink) {
+                open().use { input -> sink.writeAll(input.source()) }
+            }
+        }
         val part = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart(
-                "file",
-                fileName,
-                bytes.toRequestBody(mime.toMediaType()),
-            )
+            .addFormDataPart("file", fileName, fileBody)
             .build()
         val text = execute(
             Request.Builder()
