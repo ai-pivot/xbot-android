@@ -15,10 +15,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -94,6 +96,8 @@ fun SettingsScreen(
     val clipboard = LocalClipboardManager.current
     var showLogout by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var showScrollTrace by remember { mutableStateOf(false) }
+    var scrollTraceText by remember { mutableStateOf("") }
     var notificationsAllowed by remember {
         mutableStateOf(
             Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
@@ -470,6 +474,35 @@ fun SettingsScreen(
                 }
             }
 
+            SettingsCard(title = "滚动诊断") {
+                Text(
+                    "记录最近 200 条聊天列表滚动 / 贴底事件（同一个列表还会写 logcat 标签 ChatScroll）。" +
+                        "遇到「列表自己跳回底部」时先在这里复制，日志能定位到具体是哪一次滚动。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = {
+                            scrollTraceText = ChatScrollTrace.dump().ifBlank { "（还没有记录）" }
+                            showScrollTrace = true
+                        },
+                    ) { Text("查看") }
+                    TextButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(ChatScrollTrace.dump()))
+                            message = "已复制滚动诊断"
+                        },
+                    ) { Text("复制") }
+                    TextButton(
+                        onClick = {
+                            ChatScrollTrace.clear()
+                            message = "已清空滚动诊断"
+                        },
+                    ) { Text("清空") }
+                }
+            }
+
             SettingsCard(title = "关于") {
                 InfoRow("客户端版本", BuildConfig.VERSION_NAME)
                 Text(
@@ -496,6 +529,39 @@ fun SettingsScreen(
             text = { Text(text) },
             confirmButton = {
                 TextButton(onClick = { message = null }) { Text("好") }
+            },
+        )
+    }
+
+    if (showScrollTrace) {
+        AlertDialog(
+            onDismissRequest = { showScrollTrace = false },
+            title = { Text("滚动诊断") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    SelectionContainer {
+                        Text(
+                            scrollTraceText,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(scrollTraceText))
+                        showScrollTrace = false
+                        message = "已复制滚动诊断"
+                    },
+                ) { Text("复制") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showScrollTrace = false }) { Text("关闭") }
             },
         )
     }

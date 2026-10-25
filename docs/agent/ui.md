@@ -41,6 +41,15 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
     （布局非空 + 最后一项就是末尾 + 底边在可视区内）才能恢复 `follow`。
   - 滚动一开始就 `follow = false`，不看此刻能否向下滚；「跳到顶部」按钮显式置 `false`。
   - 贴底滚动前先等 `isScrollInProgress == false`，别和用户手势抢 `LazyListState`。
+  - **`scrollToItem(last)` 不是「到底部」**：它只把最后一项的**顶部**对齐，而且它触发的
+    measure 要到下一帧才落地；紧接着的 `scrollBy` 会读到旧布局（「不能再往下滚」）而
+    一个像素都不消费 —— 于是停在最后一项顶部（表现：距底部差两行）。必须先等一帧
+    （`withFrameNanos {}`）确认 `canScrollForward` 再滚，必要时重试几帧。
+  - 跟随尾部要用**单个长生命周期 collector**（`snapshotFlow { tail }` 在
+    `LaunchedEffect(listState)` 里），不要用以 `tail` 为 key 的 `LaunchedEffect`：
+    后者每次尾部变化都取消上一次协程，滚动做到一半被取消就又停到最后一项顶部。
+  - 复现类问题用设置 → 滚动诊断（`ui/ChatScrollTrace.kt`）：环形记录最近 200 条滚动事件
+    与布局快照，也能从 logcat 标签 `ChatScroll` 取。
 - 历史补页靠边界触发（`isScrollInProgress to firstVisibleItemIndex` + `pendingAnchor` 还原位置），
   不要用 `LaunchedEffect(Unit)` 一次性补页。
 - Markdown / 表格 / Mermaid / 图片分别由 `ui/components/MarkdownText.kt`、`MermaidView.kt`、

@@ -59,6 +59,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -321,35 +322,60 @@ fun ChatScreen(
         derivedStateOf { listState.canScrollForward }
     }
 
-    // Changes only when the *tail* of the conversation grows: streamed text,
-    // reasoning, tool status/output, a new iteration/turn, or the optimistic
-    // pending message. Prepending an older page must NOT change it, otherwise
-    // "load more" yanks the list back to the bottom (see ChatScroll.kt).
-    val tail = state.tailFingerprint(showThinking)
+    // 会话「尾部指纹」：只在尾部内容增长时变化（流式文本、推理、工具状态、新回合、
+    // 待发送气泡）。上滑补页是往前面插入历史，不改变它 —— 见 ChatScroll.kt。
 
     // Entering a session must land directly at the newest message, without
     // animating through the whole history.
     LaunchedEffect(state.loading, itemCount) {
         if (!state.loading && itemCount > 0 && !didInitialScroll) {
+            ChatScrollTrace.record("init pin count=$itemCount ${listState.snapshot()}")
             listState.scrollToBottom(itemCount)
             didInitialScroll = true
             follow = true
+            ChatScrollTrace.record("init pin done ${listState.snapshot()}")
         }
     }
 
-    // Follow the tail only while the user has not taken over the list. Keyed on
-    // `tail` alone — *not* on `follow`, and never on `itemCount`:
-    //  - prepending an older page grows the list but not the tail, so it must not scroll;
-    //  - flipping `follow` back to true is not "new content", and treating it as such
-    //    is what made an idle list jump to the bottom on any relayout.
-    LaunchedEffect(tail, state.loading) {
-        if (!shouldPinToBottom(follow, state.loading, itemCount, listState.isScrollInProgress)) {
-            return@LaunchedEffect
+    // Follow the tail only while the user has not taken over the list.
+    //
+    // 单个长生命周期 collector，而不是以 `tail` 为 key 的 LaunchedEffect：
+    // 后者每次 tail 变化都会取消上一次协程，滚动做到一半被取消就会停在
+    // 「最后一项的顶部」（看起来正是「距底部还差两行」）。
+    // 这里也绝不把 `itemCount` / `follow` 当触发条件：补页会让前者变，布局重算
+    // 会让后者被误置，两者都不是「有新内容」。
+    val latestFollow by rememberUpdatedState(follow)
+    val latestItemCount by rememberUpdatedState(itemCount)
+    val latestThinking by rememberUpdatedState(showThinking)
+
+    LaunchedEffect(listState) {
+        var firstEmission = true
+        snapshotFlow { latestState.tailFingerprint(latestThinking) }.collect {
+            // 首次进入会话的贴底交给上面的 init effect，这里只跟后续增量。
+            if (firstEmission) {
+                firstEmission = false
+                return@collect
+            }
+            if (!shouldPinToBottom(
+                    follow = latestFollow,
+                    loading = latestState.loading,
+                    itemCount = latestItemCount,
+                    userScrolling = listState.isScrollInProgress,
+                )
+            ) {
+                ChatScrollTrace.record("pin skip follow=${latestFollow} loading=${latestState.loading} ${listState.snapshot()}")
+                return@collect
+            }
+            // 等用户手势/惯性结束再贴底，别和手势抢 LazyListState。
+            snapshotFlow { listState.isScrollInProgress }.first { !it }
+            if (!latestFollow) {
+                ChatScrollTrace.record("pin abort follow=false ${listState.snapshot()}")
+                return@collect
+            }
+            ChatScrollTrace.record("pin start count=${latestItemCount} ${listState.snapshot()}")
+            listState.scrollToBottom(latestItemCount)
+            ChatScrollTrace.record("pin done ${listState.snapshot()}")
         }
-        // Let an in-flight drag/fling settle first, otherwise a programmatic
-        // scroll fights the gesture and the position jumps.
-        snapshotFlow { listState.isScrollInProgress }.first { !it }
-        listState.scrollToBottom(itemCount)
     }
 
     // The only thing that may resume following is a **scroll that ended**, i.e. a real
@@ -365,11 +391,12 @@ fun ChatScreen(
                 wasScrolling = true
                 // 用户（或我们自己的滚动）一旦开始就脱离贴底。
                 follow = followAfterUserScroll()
+                ChatScrollTrace.record("scroll start follow=false ${listState.snapshot()}")
             } else if (wasScrolling) {
                 wasScrolling = false
-                if (listState.isSettledAtBottom()) {
-                    follow = followAfterSettle(follow = follow, atBottom = true)
-                }
+                val atBottom = listState.isSettledAtBottom()
+                if (atBottom) follow = followAfterSettle(follow = follow, atBottom = true)
+                ChatScrollTrace.record("scroll end atBottom=$atBottom follow=$follow ${listState.snapshot()}")
             }
         }
     }
@@ -689,11 +716,30 @@ fun ChatScreen(
  * taller than the viewport (many iterations), so that is not the bottom of the
  * conversation — both "top" and "bottom" appeared to jump to the top for long
  * turns. Scroll by a large delta afterwards; LazyList clamps at the real end.
+ *
+ * 注意：`scrollToItem` 只强求「最后一项的顶部」对齐，而且它触发的 measure 要到
+ * 下一帧才落地。紧接着调 `scrollBy` 会读到**旧布局**（"不能再往下滚"）而一个像素
+ * 都不消费，于是停在最后一项的顶部 —— 看起来正是「距底部还差两行」。
+ * 所以这里等帧落地、确认还能滚再滚，最多重试几帧。
  */
 private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToBottom(itemCount: Int) {
     if (itemCount <= 0) return
     scrollToItem(itemCount - 1)
-    scrollBy(100_000f)
+    repeat(3) {
+        withFrameNanos { }
+        if (!canScrollForward) return
+        scrollBy(100_000f)
+    }
+}
+
+/** 诊断用：当前列表的布局快照。 */
+private fun androidx.compose.foundation.lazy.LazyListState.snapshot(): String {
+    val info = layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull()
+    return "first=$firstVisibleItemIndex/$firstVisibleItemScrollOffset " +
+        "total=${info.totalItemsCount} last=${last?.index ?: -1} " +
+        "lastEnd=${last?.let { it.offset + it.size } ?: -1} vpEnd=${info.viewportEndOffset} " +
+        "canFwd=$canScrollForward scrolling=$isScrollInProgress"
 }
 
 /**
