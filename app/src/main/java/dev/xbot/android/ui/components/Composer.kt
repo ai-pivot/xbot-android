@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -36,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.xbot.android.chat.ContextBudgetUi
 
@@ -45,14 +48,16 @@ import dev.xbot.android.chat.ContextBudgetUi
  * 高度按「一行文字」压缩过：`OutlinedTextField` 自带 56dp 的最小高度（装饰盒内固定），
  * 换成了 `BasicTextField` + 自己的圆角背景，行高约 36dp，整条输入区比原来矮 20dp 左右。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Composer(
     text: String,
     onTextChange: (String) -> Unit,
     busy: Boolean,
-    attachmentName: String?,
+    attachments: List<String> = emptyList(),
+    uploadingLabel: String? = null,
     onPickAttachment: () -> Unit,
-    onClearAttachment: () -> Unit,
+    onRemoveAttachment: (Int) -> Unit,
     onSend: () -> Unit,
     onCancel: () -> Unit,
     sending: Boolean = false,
@@ -73,34 +78,47 @@ fun Composer(
                 .navigationBarsPadding()
                 .padding(horizontal = 8.dp, vertical = 6.dp),
         ) {
-            if (attachmentName != null) {
-                Row(
+            if (attachments.isNotEmpty()) {
+                // 多个附件用 FlowRow 自动换行，最多 MAX_ATTACHMENTS 个 chip。
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    AssistChip(
-                        onClick = {},
-                        label = {
-                            Text(
-                                attachmentName,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                            )
-                        },
-                        trailingIcon = {
-                            IconButton(
-                                onClick = onClearAttachment,
-                                modifier = Modifier.size(20.dp),
-                            ) {
-                                Icon(
-                                    Icons.Filled.Close,
-                                    contentDescription = "移除附件",
-                                    modifier = Modifier.size(14.dp),
+                    attachments.forEachIndexed { index, name ->
+                        AssistChip(
+                            onClick = {},
+                            label = {
+                                Text(
+                                    name,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 150.dp),
                                 )
-                            }
-                        },
-                    )
+                            },
+                            trailingIcon = {
+                                IconButton(
+                                    onClick = { onRemoveAttachment(index) },
+                                    modifier = Modifier.size(20.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = "移除附件 $name",
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                }
+                            },
+                        )
+                    }
                 }
+            }
+            if (uploadingLabel != null) {
+                Text(
+                    uploadingLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
             }
             // 工作目录与上下文占用同处一行、整体居中：两者都没有时这一行不存在。
             if (cwd.isNotBlank() || contextBudget != null) {

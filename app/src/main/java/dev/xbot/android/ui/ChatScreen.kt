@@ -228,8 +228,10 @@ fun ChatScreen(
     }
 
     var input by rememberSaveable(chatId) { mutableStateOf("") }
-    var attachment by remember(chatId) { mutableStateOf<PendingAttachment?>(null) }
+    var attachments by remember(chatId) { mutableStateOf<List<PendingAttachment>>(emptyList()) }
     var sending by remember(chatId) { mutableStateOf(false) }
+    /** 多附件串行上传时的进度文案（"正在上传 2/3"）；单文件不需要进度条。 */
+    var uploadingLabel by remember(chatId) { mutableStateOf<String?>(null) }
 
     var sessionModel by remember(chatId) { mutableStateOf<SessionModel?>(null) }
     var availableModels by remember(chatId) { mutableStateOf<List<ModelEntry>>(emptyList()) }
@@ -272,44 +274,61 @@ fun ChatScreen(
         }
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents(),
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
         val resolver = context.contentResolver
-        var name = "attachment"
-        var size = 0L
-        resolver.query(uri, null, null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                if (nameIndex >= 0) name = cursor.getString(nameIndex) ?: name
-                if (sizeIndex >= 0) size = cursor.getLong(sizeIndex)
+        val picked = uris.mapNotNull { uri ->
+            var name = "attachment"
+            var size = 0L
+            resolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (nameIndex >= 0) name = cursor.getString(nameIndex) ?: name
+                    if (sizeIndex >= 0) size = cursor.getLong(sizeIndex)
+                }
             }
+            val mime = resolver.getType(uri) ?: "application/octet-stream"
+            PendingAttachment(uri, name, mime, size)
         }
-        val mime = resolver.getType(uri) ?: "application/octet-stream"
-        attachment = PendingAttachment(uri, name, mime, size)
+        // 同一个文件重复选中（返回同一个 Uri）只保留一份。
+        val fresh = picked.filter { candidate -> attachments.none { it.uri == candidate.uri } }
+        val plan = planAttachmentPick(
+            existingCount = attachments.size,
+            picks = fresh.map { AttachmentPick(it.name, it.size) },
+        )
+        if (plan.acceptedIndices.isNotEmpty()) {
+            attachments = attachments + plan.acceptedIndices.map { fresh[it] }
+        }
+        attachmentRejectionMessage(plan.rejected)?.let { scope.launch { snackbar.showSnackbar(it) } }
     }
 
     fun submit() {
         val text = input.trim()
-        val file = attachment
-        if (text.isEmpty() && file == null) return
+        val files = attachments
+        if (text.isEmpty() && files.isEmpty()) return
         sending = true
         scope.launch {
             try {
-                var uploadKeys = emptyList<String>()
-                var names = emptyList<String>()
-                var sizes = emptyList<Long>()
-                var mimes = emptyList<String>()
-                if (file != null) {
+                val uploadKeys = ArrayList<String>(files.size)
+                val names = ArrayList<String>(files.size)
+                val sizes = ArrayList<Long>(files.size)
+                val mimes = ArrayList<String>(files.size)
+                // 串行上传：逐个读字节、逐个 POST，避免多个大文件同时驻留内存。
+                files.forEachIndexed { index, file ->
+                    if (files.size > 1) uploadingLabel = "正在上传 ${index + 1}/${files.size}"
                     val bytes = withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(file.uri)?.use { it.readBytes() }
-                    } ?: throw IllegalStateException("无法读取附件")
+                    } ?: throw IllegalStateException("无法读取附件 ${file.name}")
                     val uploaded = app.container.api.uploadFile(bytes, file.name, file.mime)
-                    uploadKeys = listOf(uploaded.uploadKey)
-                    names = listOf(file.name)
-                    sizes = listOf(file.size)
-                    mimes = listOf(file.mime)
+                    uploadKeys += uploaded.uploadKey
+                    names += file.name
+                    sizes += file.size
+                    mimes += file.mime
                 }
+                uploadingLabel = null
                 vm.send(
                     text = text,
                     uploadKeys = uploadKeys,
@@ -318,10 +337,12 @@ fun ChatScreen(
                     fileMimes = mimes,
                 )
                 input = ""
-                attachment = null
+                attachments = emptyList()
             } catch (e: Exception) {
+                // 失败时保留待发送列表，用户可以直接重试。
                 snackbar.showSnackbar(e.message ?: "发送失败")
             } finally {
+                uploadingLabel = null
                 sending = false
             }
         }
@@ -521,9 +542,12 @@ fun ChatScreen(
                 text = input,
                 onTextChange = { input = it },
                 busy = state.busy,
-                attachmentName = attachment?.name,
+                attachments = attachments.map { it.name },
+                uploadingLabel = uploadingLabel,
                 onPickAttachment = { picker.launch("*/*") },
-                onClearAttachment = { attachment = null },
+                onRemoveAttachment = { index ->
+                    attachments = attachments.filterIndexed { i, _ -> i != index }
+                },
                 onSend = { submit() },
                 onCancel = vm::cancel,
                 sending = sending,

@@ -17,6 +17,23 @@ Material3 的 `OutlinedTextField` / `TextField` 在**装饰盒内部**写死了 
 图标按钮同理由默认 48dp 压到 36dp（`Modifier.size(36.dp)` + `Icon` 20dp），行内 `spacedBy(2.dp)`，
 整条输入区（含 `imePadding` / `navigationBarsPadding` 之外的 6dp 内边距）在单行时约 48dp。
 
+## 附件（多选）
+
+- 状态在 `ChatScreen.kt`：`attachments: List<PendingAttachment>`（0.4.6 起是列表，
+  以前是单个可空的 `attachment`，再选一次会顶掉上一个）。
+- 选择器用 `ActivityResultContracts.GetMultipleContents()`；每个 Uri 通过
+  `ContentResolver.query` 拿 `DISPLAY_NAME` / `SIZE`，`getType()` 兜底
+  `application/octet-stream`。同一个 Uri 重复选中只保留一份。
+- **限制在 `ui/AttachmentRules.kt`（纯函数 + `AttachmentRulesTest`）**：
+  最多 `MAX_ATTACHMENTS = 5` 个、单个 `MAX_ATTACHMENT_BYTES = 10MB`。
+  10MB 是服务端 `POST /api/files/upload` 的硬限制（xbot `channel/web/web_file.go`
+  的 `maxFileSize = 10 << 20`，超了直接 413），客户端提前拦，别让用户传完才失败。
+  空文件（拿不到 size）、超限、超额都会被跳过并合并成一条 snackbar 提示。
+- 发送时**串行上传**（逐个 `readBytes` + `uploadFile`），避免多个大文件同时驻留内存；
+  多于一个附件时输入区显示「正在上传 2/3」。上传失败**不清空**待发送列表，可直接重试。
+- 服务端 `/api/message` 本来就收 `upload_keys` 数组（`expandUploadKeys` 逐个拼引用），
+  所以多附件在协议层无需改动。
+
 ## 上下文预算的数据来源
 
 只有一条真实数据源：`POST /api/session/status`（服务端 `channel/web/web_rest.go: handleSessionStatus`）。
