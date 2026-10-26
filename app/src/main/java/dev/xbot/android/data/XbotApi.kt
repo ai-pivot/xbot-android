@@ -248,15 +248,7 @@ class XbotApi(private val prefs: AppPrefs) {
         contentLength: Long,
         open: () -> InputStream,
     ): UploadResponse {
-        val fileBody = object : RequestBody() {
-            override fun contentType() = mime.toMediaType()
-
-            override fun contentLength() = contentLength
-
-            override fun writeTo(sink: BufferedSink) {
-                open().use { input -> sink.writeAll(input.source()) }
-            }
-        }
+        val fileBody = StreamingFileBody(mime = mime, length = contentLength, open = open)
         val part = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("file", fileName, fileBody)
@@ -270,9 +262,33 @@ class XbotApi(private val prefs: AppPrefs) {
         return decodeEnvelope(text)
     }
 
-    // ------------------------------------------------------------------
-    // RPC (existing /api/rpc dispatch table — unchanged)
-    // ------------------------------------------------------------------
+    /**
+     * 上传单个附件的**兼容路径**：先把文件读成字节，再整体 POST。
+     *
+     * 只在流式上传失败时兜底使用（个别 provider 的 `content://` 流长度与
+     * `OpenableColumns.SIZE` 对不上，OkHttp 会抛 `unexpected end of stream`）。
+     */
+    suspend fun uploadFileBytes(
+        bytes: ByteArray,
+        fileName: String,
+        mime: String,
+    ): UploadResponse {
+        val fileBody = runCatching { mime.toMediaType() }
+            .getOrNull()
+            ?.let { bytes.toRequestBody(it) }
+            ?: bytes.toRequestBody()
+        val part = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("file", fileName, fileBody)
+            .build()
+        val text = execute(
+            Request.Builder()
+                .url(urlBuilder("/api/files/upload").build())
+                .post(part)
+                .build(),
+        )
+        return decodeEnvelope(text)
+    }
 
     suspend fun rpc(method: String, params: JsonObject = JsonObject(emptyMap())): JsonElement {
         val body = buildJsonObject {

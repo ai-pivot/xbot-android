@@ -4,6 +4,20 @@
 写进更新清单的 `changelog` 字段，最终显示在 app 的更新卡片上。小节标题请严格保持
 `## [版本号]` 的形式，最新版本放最上面。
 
+## [0.4.8]
+
+修附件「一直上传失败」。
+
+### 修复
+- 流式上传失败时自动回退到「整块读进内存」的兼容上传：个别 provider 的
+  `content://` 流实际长度和 `OpenableColumns.SIZE` 对不上，OkHttp 会直接抛
+  `unexpected end of stream`，表现为红 chip。
+- `contentType` 解析失败不再在 IO 线程抛异常，统一回退 `application/octet-stream`。
+
+### 新增
+- 上传失败会在底部弹出**具体原因**（如 `「a.jpg」上传失败：http_413 file too large (max 10MB)`），
+  同时写入「设置 → 滚动 / 上传诊断」的日志，便于定位。
+
 ## [0.4.7]
 
 附件改成**选中即上传**，发送不再等上传。

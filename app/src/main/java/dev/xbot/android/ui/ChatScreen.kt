@@ -287,8 +287,8 @@ fun ChatScreen(
     fun uploadAttachment(item: PendingAttachment) {
         updateAttachment(item.uri) { it.copy(state = AttachmentState.Uploading) }
         scope.launch {
-            runCatching {
-                uploadSlots.withPermit {
+            val result = uploadSlots.withPermit {
+                runCatching {
                     app.container.api.uploadFile(
                         fileName = item.name,
                         mime = item.mime,
@@ -298,15 +298,30 @@ fun ChatScreen(
                                 ?: throw IllegalStateException("无法读取附件 ${item.name}")
                         },
                     )
+                }.recoverCatching { streamError ->
+                    // 个别 provider 的 content:// 流长度与 OpenableColumns.SIZE 对不上
+                    // （OkHttp 会抛 unexpected end of stream），退回「整块读进内存」上传。
+                    ChatScrollTrace.record(
+                        "upload stream failed ${item.name}: " +
+                            "${streamError.javaClass.simpleName}: ${streamError.message} → buffered",
+                    )
+                    val bytes = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(item.uri)
+                            ?.use { it.readBytes() }
+                    } ?: throw IllegalStateException("无法读取附件 ${item.name}")
+                    app.container.api.uploadFileBytes(bytes, item.name, item.mime)
                 }
-            }.onSuccess { response ->
+            }
+            result.onSuccess { response ->
                 updateAttachment(item.uri) {
                     it.copy(state = AttachmentState.Done(response.uploadKey))
                 }
             }.onFailure { e ->
-                updateAttachment(item.uri) {
-                    it.copy(state = AttachmentState.Failed(e.message ?: "上传失败"))
-                }
+                val reason = e.message?.takeIf { it.isNotBlank() }
+                    ?: e.javaClass.simpleName
+                ChatScrollTrace.record("upload failed ${item.name}: ${e.javaClass.name}: ${e.message}")
+                updateAttachment(item.uri) { it.copy(state = AttachmentState.Failed(reason)) }
+                snackbar.showSnackbar("「${item.name}」上传失败：$reason")
             }
         }
     }

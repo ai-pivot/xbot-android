@@ -30,8 +30,14 @@ Material3 的 `OutlinedTextField` / `TextField` 在**装饰盒内部**写死了 
   最多 2 个并发（`Semaphore(2)`），其余排队。代价是用户选了不发会在服务端留下未引用的
   对象 —— 由服务端清理，客户端不管。
 - **流式上传**：`XbotApi.uploadFile(fileName, mime, contentLength, open: () -> InputStream)`
-  用自定义 `RequestBody` 把 `InputStream` 直接写进请求体，不再 `readBytes()`；
-  `contentLength` 必须是真实字节数（服务端 `MaxBytesReader` 拒 chunked）。
+  用 `data/StreamingFileBody` 把 `InputStream` 直接写进请求体，不再 `readBytes()`。
+  两个坑：`contentLength` 必须与流实际长度一致（OkHttp 不等会抛 `unexpected end of stream`），
+  `contentType` 解析失败不能在 IO 线程抛（统一回退 `application/octet-stream`）。
+  流式失败会**自动回退**到 `uploadFileBytes`（整块读进内存）—— 个别 provider 的
+  `content://` 流长度和 `OpenableColumns.SIZE` 对不上，纯流式会永远失败。
+  这块有 `StreamingFileBodyTest`（MockWebServer 真发包）钉住 Content-Length 与字节完整性。
+- 上传失败要**把原因说出来**：底部 snackbar 显示具体异常信息，并写入设置 →
+  滚动 / 上传诊断。只画红 chip 什么也查不到。
 - **限制在 `ui/AttachmentRules.kt`（纯函数 + `AttachmentRulesTest`）**：
   最多 `MAX_ATTACHMENTS = 5` 个、单个 `MAX_ATTACHMENT_BYTES = 10MB`
   （服务端 `channel/web/web_file.go` 的 `maxFileSize = 10 << 20`，超了 413）。

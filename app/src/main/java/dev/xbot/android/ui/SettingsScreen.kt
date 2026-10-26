@@ -474,7 +474,7 @@ fun SettingsScreen(
                 }
             }
 
-            SettingsCard(title = "滚动诊断") {
+            SettingsCard(title = "滚动 / 上传诊断") {
                 Text(
                     "记录最近 200 条聊天列表滚动 / 贴底事件（同一个列表还会写 logcat 标签 ChatScroll）。" +
                         "遇到「列表自己跳回底部」时先在这里复制，日志能定位到具体是哪一次滚动。",
