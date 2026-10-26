@@ -47,6 +47,11 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
     一个像素都不消费 —— 停在最后一项顶部。新一轮对话里 TurnBlock 的开头正是用户气泡，
     所以症状会表现为「跳到了用户那条消息」。`withFrameNanos` 回调也排在 layout 之前，
     必须**等两帧**再判断/再滚（见 `scrollToBottom`）。
+  - **最后一项可见时绝不能再调 `scrollToItem`**（0.4.10）：它会把该项顶部对齐视口顶部，
+    补回底部的 `scrollBy` 下一帧才生效 —— 中间那一帧就是「跳到这条消息开头」。流式输出
+    时贴底每几十毫秒一次，表现为持续抖动（日志里 `pin start`/`pin done` 每秒十几对，
+    而且 `canFwd=false` 还在 pin）。正确做法是只补「内容超出视口底部的距离」：
+    `scrollBy(last.offset + last.size - viewportEndOffset)`，单次滚动同帧生效、无中间帧。
   - 上滑补页的锚点恢复只在「列表仍停在请求那一刻的位置」时纠正索引
     （`shouldRestoreAnchor`：offset 未变 + 期间没有新滚动 + 索引真的变了）。
     少了这个守卫，补页回来会把已经贴底/被用户滑走的列表拽回请求时的位置 ——

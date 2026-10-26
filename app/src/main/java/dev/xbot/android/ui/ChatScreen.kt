@@ -446,6 +446,8 @@ fun ChatScreen(
 
     LaunchedEffect(listState) {
         var firstEmission = true
+        var lastPinLogAt = 0L
+        var suppressedPins = 0
         snapshotFlow { latestState.tailFingerprint(latestThinking) }.collect {
             // 首次进入会话的贴底交给上面的 init effect，这里只跟后续增量。
             if (firstEmission) {
@@ -459,18 +461,27 @@ fun ChatScreen(
                     userScrolling = listState.isScrollInProgress,
                 )
             ) {
-                AppLog.i("scroll", "pin skip follow=${latestFollow} loading=${latestState.loading} ${listState.snapshot()}")
                 return@collect
             }
             // 等用户手势/惯性结束再贴底，别和手势抢 LazyListState。
             snapshotFlow { listState.isScrollInProgress }.first { !it }
-            if (!latestFollow) {
-                AppLog.i("scroll", "pin abort follow=false ${listState.snapshot()}")
-                return@collect
-            }
-            AppLog.i("scroll", "pin start count=${latestItemCount} ${listState.snapshot()}")
+            if (!latestFollow) return@collect
+            val before = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
             listState.scrollToBottom(latestItemCount)
-            AppLog.i("scroll", "pin done ${listState.snapshot()}")
+            // 流式输出时贴底每几十毫秒一次，日志必须节流，否则环形缓冲被冲干净。
+            val now = System.currentTimeMillis()
+            if (now - lastPinLogAt >= 2000) {
+                val after = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                AppLog.i(
+                    "scroll",
+                    "pin count=${latestItemCount} moved=${before != after} " +
+                        "suppressed=$suppressedPins ${listState.snapshot()}",
+                )
+                lastPinLogAt = now
+                suppressedPins = 0
+            } else {
+                suppressedPins += 1
+            }
         }
     }
 
@@ -829,28 +840,41 @@ fun ChatScreen(
 }
 
 /**
- * LazyList `scrollToItem(last)` aligns the TOP of the last item. A turn can be
- * taller than the viewport (many iterations), so that is not the bottom of the
- * conversation — both "top" and "bottom" appeared to jump to the top for long
- * turns. Scroll by a large delta afterwards; LazyList clamps at the real end.
+ * 滚到「真正的底部」。
  *
- * 关键顺序问题：`scrollToItem` 只强求「最后一项的顶部」对齐，而它触发的 measure
- * 要等**下一帧的 layout** 之后才生效；在那之前 `canScrollForward` / `scrollBy`
- * 用的都是**旧位置**的测量结果。跟随状态下旧位置本来就在底部 → 读到 false →
- * 紧接的 `scrollBy` 一个像素都不消费 → 停在最后一项的顶部（新一轮对话里就是
- * 用户那条消息，看起来像「跳到了用户信息」）。`withFrameNanos` 回调也排在
- * layout 之前，所以必须多等一帧才能看到新布局。
+ * 关键：**最后一项已经可见时绝不能用 `scrollToItem`**。它只把该项的**顶部**对齐
+ * 视口顶部，而邀请到真实底部的 `scrollBy` 要到下一帧才生效 —— 中间会渲染出一帧
+ * 「跳到这条消息开头」。流式输出时贴底每几十毫秒一次，看起来就是持续抖动
+ * （日志里 `pin start`/`pin done` 每秒十几对，`canFwd=false` 却还在 pin）。
+ *
+ * 所以：
+ * - 最后一项可见 → 只补「内容超出视口底部的距离」（一次 `scrollBy`，同帧生效）；
+ * - 最后一项还不可见（新回合、从顶部回到底部）→ 先 `scrollToItem` 定位，等布局
+ *   落地后再补差距。
  */
 private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToBottom(itemCount: Int) {
     if (itemCount <= 0) return
-    scrollToItem(itemCount - 1)
-    repeat(3) {
-        // 第 1 个 withFrameNanos 让 scrollToItem 的 remeasure 进入这一帧的 layout，
-        // 第 2 个让出到 layout 之后，此时 canScrollForward / scrollBy 才是新位置的值。
+    val lastIndex = itemCount - 1
+    val info = layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull()
+
+    if (last != null && last.index == lastIndex) {
+        val deficit = last.offset + last.size - info.viewportEndOffset
+        if (deficit > 0) scrollBy(deficit.toFloat())
+        return
+    }
+
+    scrollToItem(lastIndex)
+    repeat(2) {
+        // scrollToItem 触发的 measure 要到下一帧 layout 之后才生效
+        // （withFrameNanos 回调本身排在 layout 之前，所以要等两帧）。
         withFrameNanos { }
         withFrameNanos { }
-        if (!canScrollForward) return
-        scrollBy(100_000f)
+        val now = layoutInfo
+        val tail = now.visibleItemsInfo.lastOrNull() ?: return
+        val deficit = tail.offset + tail.size - now.viewportEndOffset
+        if (deficit <= 0) return
+        scrollBy(deficit.toFloat())
     }
 }
 
