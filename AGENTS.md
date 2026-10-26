@@ -58,6 +58,7 @@ iteration 按序号合并，checkpoint 替换 / delta 追加，收到 turn 结�
 - `docs/agent/chat.md` — 历史装载的两条路径（替换 vs 合并）、Rewind 后为什么必须整体重载
 - `docs/agent/ui.md` — Compose 界面约定、TopAppBar 布局陷阱、聊天页结构
 - `docs/agent/ui-composer.md` — 输入区高度（为什么必须 `BasicTextField`）、上下文预算指示器的数据来源与三种口径
+- `docs/agent/logs.md` — 端侧日志（AppLog / 日志页 / 打包上传 / 脱敏约定），排查问题先看这里
 
 ## 约定
 

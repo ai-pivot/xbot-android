@@ -55,7 +55,8 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
   - 跟随尾部要用**单个长生命周期 collector**（`snapshotFlow { tail }` 在
     `LaunchedEffect(listState)` 里），不要用以 `tail` 为 key 的 `LaunchedEffect`：
     后者每次尾部变化都取消上一次协程，滚动做到一半被取消就又停到最后一项顶部。
-  - 复现类问题用设置 → 滚动诊断（`ui/ChatScrollTrace.kt`）：环形记录最近 200 条滚动事件
+  - 复现类问题用「设置 → 日志」（`logs/AppLog.kt`，见 `docs/agent/logs.md`）：
+    滚动事件按 tag `scroll` 记录，直接在里面筛 `pin` / `anchor` / `scroll`。
     与布局快照，也能从 logcat 标签 `ChatScroll` 取。
 - 历史补页靠边界触发（`isScrollInProgress to firstVisibleItemIndex` + `pendingAnchor` 还原位置），
   不要用 `LaunchedEffect(Unit)` 一次性补页。

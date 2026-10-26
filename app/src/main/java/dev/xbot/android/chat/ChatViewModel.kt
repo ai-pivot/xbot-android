@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.xbot.android.XbotApp
+import dev.xbot.android.logs.AppLog
 import dev.xbot.android.data.UnauthorizedException
 import dev.xbot.android.data.WsMessage
 import dev.xbot.android.data.XbotSseClient
@@ -37,6 +38,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun open(chatId: String, channel: String, title: String) {
         if (this.chatId == chatId && this.channel == channel) return
+        AppLog.i("chat", "open chat=$chatId channel=$channel")
         closeStream()
         this.chatId = chatId
         this.channel = channel

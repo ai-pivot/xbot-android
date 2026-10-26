@@ -78,6 +78,7 @@ import dev.xbot.android.chat.TurnUi
 import dev.xbot.android.data.ModelEntry
 import dev.xbot.android.data.RewindResponse
 import dev.xbot.android.data.SessionModel
+import dev.xbot.android.logs.AppLog
 import dev.xbot.android.ui.components.AskUserDialog
 import dev.xbot.android.ui.components.AttachmentChip
 import dev.xbot.android.ui.components.AutoLinkText
@@ -208,7 +209,7 @@ fun ChatScreen(
         val moved = anchor.epoch != scrollEpoch ||
             listState.firstVisibleItemScrollOffset != anchor.offset
         if (moved) {
-            ChatScrollTrace.record("anchor skip (moved) ${listState.snapshot()}")
+            AppLog.i("scroll", "anchor skip (moved) ${listState.snapshot()}")
             pendingAnchor = null
             return@LaunchedEffect
         }
@@ -224,7 +225,7 @@ fun ChatScreen(
                     targetIndex = target,
                 )
             ) {
-                ChatScrollTrace.record("anchor restore turn=${anchor.turnId} idx=$target ${listState.snapshot()}")
+                AppLog.i("scroll", "anchor restore turn=${anchor.turnId} idx=$target ${listState.snapshot()}")
                 listState.scrollToItem(target, anchor.offset)
             }
         }
@@ -301,7 +302,7 @@ fun ChatScreen(
                 }.recoverCatching { streamError ->
                     // 个别 provider 的 content:// 流长度与 OpenableColumns.SIZE 对不上
                     // （OkHttp 会抛 unexpected end of stream），退回「整块读进内存」上传。
-                    ChatScrollTrace.record(
+                    AppLog.w("upload", 
                         "upload stream failed ${item.name}: " +
                             "${streamError.javaClass.simpleName}: ${streamError.message} → buffered",
                     )
@@ -319,7 +320,7 @@ fun ChatScreen(
             }.onFailure { e ->
                 val reason = e.message?.takeIf { it.isNotBlank() }
                     ?: e.javaClass.simpleName
-                ChatScrollTrace.record("upload failed ${item.name}: ${e.javaClass.name}: ${e.message}")
+                AppLog.e("upload", "upload failed ${item.name}: ${e.javaClass.name}: ${e.message}")
                 updateAttachment(item.uri) { it.copy(state = AttachmentState.Failed(reason)) }
                 snackbar.showSnackbar("「${item.name}」上传失败：$reason")
             }
@@ -424,11 +425,11 @@ fun ChatScreen(
     // animating through the whole history.
     LaunchedEffect(state.loading, itemCount) {
         if (!state.loading && itemCount > 0 && !didInitialScroll) {
-            ChatScrollTrace.record("init pin count=$itemCount ${listState.snapshot()}")
+            AppLog.i("scroll", "init pin count=$itemCount ${listState.snapshot()}")
             listState.scrollToBottom(itemCount)
             didInitialScroll = true
             follow = true
-            ChatScrollTrace.record("init pin done ${listState.snapshot()}")
+            AppLog.i("scroll", "init pin done ${listState.snapshot()}")
         }
     }
 
@@ -458,18 +459,18 @@ fun ChatScreen(
                     userScrolling = listState.isScrollInProgress,
                 )
             ) {
-                ChatScrollTrace.record("pin skip follow=${latestFollow} loading=${latestState.loading} ${listState.snapshot()}")
+                AppLog.i("scroll", "pin skip follow=${latestFollow} loading=${latestState.loading} ${listState.snapshot()}")
                 return@collect
             }
             // 等用户手势/惯性结束再贴底，别和手势抢 LazyListState。
             snapshotFlow { listState.isScrollInProgress }.first { !it }
             if (!latestFollow) {
-                ChatScrollTrace.record("pin abort follow=false ${listState.snapshot()}")
+                AppLog.i("scroll", "pin abort follow=false ${listState.snapshot()}")
                 return@collect
             }
-            ChatScrollTrace.record("pin start count=${latestItemCount} ${listState.snapshot()}")
+            AppLog.i("scroll", "pin start count=${latestItemCount} ${listState.snapshot()}")
             listState.scrollToBottom(latestItemCount)
-            ChatScrollTrace.record("pin done ${listState.snapshot()}")
+            AppLog.i("scroll", "pin done ${listState.snapshot()}")
         }
     }
 
@@ -487,12 +488,12 @@ fun ChatScreen(
                 // 用户（或我们自己的滚动）一旦开始就脱离贴底。
                 follow = followAfterUserScroll()
                 scrollEpoch += 1
-                ChatScrollTrace.record("scroll start follow=false ${listState.snapshot()}")
+                AppLog.i("scroll", "scroll start follow=false ${listState.snapshot()}")
             } else if (wasScrolling) {
                 wasScrolling = false
                 val atBottom = listState.isSettledAtBottom()
                 if (atBottom) follow = followAfterSettle(follow = follow, atBottom = true)
-                ChatScrollTrace.record("scroll end atBottom=$atBottom follow=$follow ${listState.snapshot()}")
+                AppLog.i("scroll", "scroll end atBottom=$atBottom follow=$follow ${listState.snapshot()}")
             }
         }
     }

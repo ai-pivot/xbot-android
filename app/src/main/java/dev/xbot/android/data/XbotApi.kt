@@ -1,5 +1,6 @@
 package dev.xbot.android.data
 
+import dev.xbot.android.logs.AppLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
@@ -554,23 +555,33 @@ class XbotApi(private val prefs: AppPrefs) {
     }
 
     private suspend fun execute(request: Request): String = withContext(Dispatchers.IO) {
-        client.newCall(request).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                val error = runCatching {
-                    XbotJson.decodeFromString<ApiEnvelope<JsonElement>>(text).error
-                }.getOrNull()
-                if (response.code == 401) {
-                    throw UnauthorizedException(error?.message ?: "登录已失效，请重新登录")
-                }
-                throw ApiException(
-                    code = error?.code ?: "http_${response.code}",
-                    message = error?.message ?: "HTTP ${response.code}",
-                    httpStatus = response.code,
-                )
+        val startedAt = System.currentTimeMillis()
+        val label = "${request.method} ${request.url.encodedPath}"
+        val (code, text) = try {
+            client.newCall(request).execute().use { response ->
+                response.code to (response.body?.string().orEmpty())
             }
-            text
+        } catch (e: Exception) {
+            AppLog.e("http", "$label 失败（${System.currentTimeMillis() - startedAt}ms）", e)
+            throw e
         }
+        val cost = System.currentTimeMillis() - startedAt
+        if (code !in 200..299) {
+            AppLog.w("http", "$label → $code ${text.take(300)}（${cost}ms）")
+            val error = runCatching {
+                XbotJson.decodeFromString<ApiEnvelope<JsonElement>>(text).error
+            }.getOrNull()
+            if (code == 401) {
+                throw UnauthorizedException(error?.message ?: "登录已失效，请重新登录")
+            }
+            throw ApiException(
+                code = error?.code ?: "http_$code",
+                message = error?.message ?: "HTTP $code",
+                httpStatus = code,
+            )
+        }
+        AppLog.d("http", "$label → $code ${text.length}B（${cost}ms）")
+        text
     }
 
     private inline fun <reified T> decodeEnvelope(text: String): T {
@@ -597,6 +608,10 @@ class XbotApi(private val prefs: AppPrefs) {
             (normalizeBaseUrl(prefs.serverUrl) + path).toHttpUrlOrNull()
                 ?: throw ApiException("bad_url", "服务器地址无效：${prefs.serverUrl}")
             ).newBuilder()
+
+    /** 上传后拿到的 key 拼成可直接在浏览器打开的下载地址（日志包分享用）。 */
+    fun downloadUrl(uploadKey: String): String =
+        normalizeBaseUrl(prefs.serverUrl) + "/api/files/download?key=" + encodePath(uploadKey)
 
     private fun encodePath(value: String): String =
         java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
