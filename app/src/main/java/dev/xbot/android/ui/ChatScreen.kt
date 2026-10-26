@@ -937,16 +937,11 @@ private fun TurnBlock(turn: TurnUi) {
 
 @Composable
 private fun IterationBlock(iteration: IterationUi) {
+    // 顺序要跟模型的真实产出顺序一致：先思考、再正文、最后才是工具调用。
+    // 反过来（工具在正文前）会让「先说结论、再执行」的回合看起来像倒放。
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (iteration.reasoning.isNotBlank()) {
             ReasoningBlock(iteration.reasoning)
-        }
-        if (iteration.tools.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                iteration.tools.forEach { tool ->
-                    ToolCard(tool)
-                }
-            }
         }
         if (iteration.content.isNotBlank()) {
             CopyOrSelectText(text = iteration.content) {
@@ -956,6 +951,13 @@ private fun IterationBlock(iteration: IterationUi) {
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
                 )
+            }
+        }
+        if (iteration.tools.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                iteration.tools.forEach { tool ->
+                    ToolCard(tool)
+                }
             }
         }
     }

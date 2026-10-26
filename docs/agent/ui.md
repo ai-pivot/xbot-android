@@ -29,6 +29,9 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
 ## 聊天页结构（ui/ChatScreen.kt）
 
 - `Scaffold(topBar = TopAppBar, bottomBar = Composer, snackbarHost = ...)`，内容区是 `LazyColumn`。
+- **单个 iteration 的渲染顺序固定为「思考 → 正文 → 工具」**（`IterationBlock`），跟模型真实
+  产出顺序一致。别把正文排到工具后面：那样「先说结论、再执行」的回合会看起来像倒放
+  （0.4.11 修的就是这个）。
 - 贴底（auto-follow）逻辑在 `ui/ChatScroll.kt`（纯函数，`ChatScrollTest` 覆盖），ChatScreen 只喂事件：
   - 「尾部指纹」`tailFingerprint()` **不含 `turns.size`**：上滑补页是往前面插入历史，
     长度变了但尾部没变，用长度判断会把用户拽回底部（0.4.1 修的）。
