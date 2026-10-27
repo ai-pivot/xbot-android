@@ -723,7 +723,10 @@ fun ChatScreen(
                             }
                         }
                         items(state.turns, key = { it.turnId }) { turn ->
-                            TurnBlock(turn)
+                            val liveTurnId = state.liveTurnId.takeIf { it > 0L }
+                                ?: state.turns.lastOrNull()?.turnId
+                                ?: 0L
+                            TurnBlock(turn = turn, running = state.busy && turn.turnId == liveTurnId)
                         }
                         state.pendingUserText?.let { pending ->
                             item(key = "pending_user") {
@@ -905,25 +908,30 @@ private fun LazyListState.isSettledAtBottom(): Boolean {
 }
 
 @Composable
-private fun TurnBlock(turn: TurnUi) {
+private fun TurnBlock(turn: TurnUi, running: Boolean) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (turn.userText.isNotBlank()) {
             UserBubble(turn.userText)
         }
-        turn.iterations.forEach { iteration ->
-            IterationBlock(iteration)
+
+        val answer = turn.finalAnswerText()
+        val process = turn.process()
+        if (!process.isEmpty) {
+            ProcessBlock(turn = turn, process = process, answer = answer, running = running)
         }
-        val lastContent = turn.iterations.lastOrNull()?.content.orEmpty()
-        if (turn.finalText.isNotBlank() && turn.finalText != lastContent) {
-            CopyOrSelectText(text = turn.finalText) {
+
+        // 最终答复永远显示，不参与折叠。
+        if (answer.isNotBlank()) {
+            CopyOrSelectText(text = answer) {
                 MarkdownText(
-                    text = turn.finalText,
+                    text = answer,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
                 )
             }
         }
+
         if (turn.cancelled) {
             Text(
                 "已取消",
@@ -935,28 +943,78 @@ private fun TurnBlock(turn: TurnUi) {
     }
 }
 
+/**
+ * 一轮里的「过程」（思考 / 过程旁白 / 工具调用）整体折叠成一行。
+ *
+ * 手机上过程逐条铺开要占半屏（3 思考 + 6 工具 ≈ 350dp），所以默认折叠；
+ * **运行中自动展开**（要看实时进度），跑完自动收起；用户手动点过之后按用户的来。
+ */
 @Composable
-private fun IterationBlock(iteration: IterationUi) {
-    // 顺序要跟模型的真实产出顺序一致：先思考、再正文、最后才是工具调用。
-    // 反过来（工具在正文前）会让「先说结论、再执行」的回合看起来像倒放。
+private fun ProcessBlock(
+    turn: TurnUi,
+    process: TurnProcess,
+    answer: String,
+    running: Boolean,
+) {
+    // null = 跟随运行状态自动展开/收起
+    var manual by remember(turn.turnId) { mutableStateOf<Boolean?>(null) }
+    val expanded = manual ?: running
+    val currentTool = turn.iterations.asReversed()
+        .firstNotNullOfOrNull { iteration -> iteration.tools.lastOrNull { it.running }?.title }
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (iteration.reasoning.isNotBlank()) {
-            ReasoningBlock(iteration.reasoning)
-        }
-        if (iteration.content.isNotBlank()) {
-            CopyOrSelectText(text = iteration.content) {
-                MarkdownText(
-                    text = iteration.content,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { manual = !expanded }
+                .padding(horizontal = 6.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起过程" else "展开过程",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(2.dp))
+            Text(
+                processLabel(process, running, currentTool),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (running) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
-        if (iteration.tools.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                iteration.tools.forEach { tool ->
-                    ToolCard(tool)
+
+        if (expanded) {
+            turn.iterations.forEach { iteration ->
+                // 顺序跟模型真实产出一致：思考 → 正文 → 工具（0.4.11 的约定）。
+                if (iteration.reasoning.isNotBlank()) {
+                    ReasoningBlock(iteration.reasoning)
+                }
+                if (iteration.content.isNotBlank() && iteration.content != answer) {
+                    CopyOrSelectText(text = iteration.content) {
+                        MarkdownText(
+                            text = iteration.content,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp),
+                        )
+                    }
+                }
+                if (iteration.tools.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        iteration.tools.forEach { tool -> ToolCard(tool) }
+                    }
                 }
             }
         }
