@@ -37,15 +37,19 @@ SSE 侧由 reducer 标记 `ChatUiState.needsReload` + `reloadReplacesHistory`（
 `history_rewound`），ViewModel 消费时把后者传给 `reload(replaceTurns = ...)`。
 **不要只用 `needsReload` 一个布尔量**：`resync_required` 也用它，而那条路径必须是合并语义。
 
-## 回退（Rewind）的两条入口
+## 回退（Rewind）：只有一个入口
 
-| 入口 | 行为 |
+用户消息下方 **「编辑」** 按钮 → 弹出预填原文的编辑框（自动聚焦）→ 两个动作：
+
+| 按钮 | 行为 |
 |---|---|
-| 用户消息下方「编辑」按钮（0.4.15 起，主路径） | 弹出预填原文的编辑框 → **改完点确定才发起回退** → `rewind` → 等历史整体重载 → 用编辑后的文字重新发送 |
-| 顶栏 History 对话框 | 选一条历史消息 → `rewind` → 整体重载 → 把服务端返回的草稿放回输入框（不改内容时用） |
+| 确定并重新发送 | `rewindTo(historyId, text, resend = true)`：rewind → 等历史整体重载 → 用编辑后的文字发送 |
+| 仅回退 | `rewindTo(historyId, text, resend = false)`：rewind → 重载 → **什么都不发**，文字放进 `ChatUiState.draft`，UI 回填输入框后调 `consumeDraft()` |
 
-顺序不能换：`ChatViewModel.rewindAndResend()` 里是 `rewindHistory` → `loadHistoryOnce(replaceTurns = true)` →
-`send()`。先发再重载会让新消息挂在旧列表上、SSE 回声多出一条；不重载直接发则界面上看起来像"发丢了"。
+顶栏原来的「回退」对话框（`RewindDialog`）在 0.4.16 删掉了 —— 两个入口只会让文案和状态各说一套话。
+
+顺序不能换：`rewindHistory` → `loadHistoryOnce(replaceTurns = true)` → 再决定发不发。
+先发再重载会让新消息挂在旧列表上、SSE 回声多出一条；不重载直接发则界面上看起来像"发丢了"。
 
 能否编辑由 `ui/RewindRules.kt` 的 `canRewindTurn()` 判定（纯函数 + `RewindRulesTest`）：
 需要持久化 `userHistoryId > 0`、非空正文、当前没有回合在跑、也不在回退中（`ChatUiState.rewinding`）。

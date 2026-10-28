@@ -1,6 +1,7 @@
 package dev.xbot.android.ui.components
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
@@ -32,6 +33,7 @@ fun EditMessageDialog(
     busy: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
+    onRewindOnly: (String) -> Unit,
 ) {
     var text by remember(original) { mutableStateOf(original) }
     val focusRequester = remember { FocusRequester() }
@@ -47,7 +49,8 @@ fun EditMessageDialog(
         text = {
             Column {
                 Text(
-                    "将删除这条消息以及它之后的全部内容，然后用编辑后的文字重新发送。",
+                    "将从这条消息处回退：它和它之后的全部内容都会被删除。" +
+                        "可以改完直接重发，也可以只回退、把文字放回输入框。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -74,7 +77,15 @@ fun EditMessageDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !busy) { Text("取消") }
+            Row {
+                TextButton(
+                    onClick = { onRewindOnly(text.trim()) },
+                    enabled = !busy,
+                ) {
+                    Text("仅回退")
+                }
+                TextButton(onClick = onDismiss, enabled = !busy) { Text("取消") }
+            }
         },
     )
 }

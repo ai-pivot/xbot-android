@@ -86,6 +86,8 @@ data class ChatUiState(
     val pendingUserText: String? = null,
     /** 正在回退（服务端截断 + 重载历史）——期间禁止再次编辑/发送。 */
     val rewinding: Boolean = false,
+    /** 回退后要回填到输入框的草稿（"仅回退"时用），UI 消费后调 `consumeDraft()`。 */
+    val draft: String? = null,
     /** null = 服务端还没有真实 token 数据（新会话 / 未发起过 LLM 调用）。 */
     val contextBudget: ContextBudgetUi? = null,
 ) {

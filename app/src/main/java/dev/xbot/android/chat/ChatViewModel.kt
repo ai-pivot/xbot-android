@@ -94,23 +94,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 回退到某条用户消息，并用**编辑后的文字**重新发送。
+     * 回退到某条用户消息（[historyId] 是它的 `userHistoryId`）。
      *
-     * 顺序是关键：先 `rewind`（服务端截断历史）→ 再等历史**整体重载**落地 → 最后才发。
+     * 顺序是关键：先 `rewind`（服务端截断历史）→ 再等历史**整体重载**落地 → 最后才决定发不发。
      * 如果先发再重载，新消息会挂在旧列表上，SSE 回声还会多出一条；如果只重载不等待，
      * 发送时 `turns` 还是旧的，界面上看起来就像"消息发丢了"。
+     *
+     * [resend] = true：用 [text] 重新发送；
+     * [resend] = false：**什么都不发**，只把 [text] 回填到输入框（`ChatUiState.draft`，UI 消费后清空）。
      */
-    fun rewindAndResend(historyId: Long, text: String) {
+    fun rewindTo(historyId: Long, text: String, resend: Boolean) {
         if (chatId.isBlank() || historyId <= 0L) return
         val content = text.trim()
-        if (content.isEmpty()) return
         viewModelScope.launch {
-            _state.update { it.copy(rewinding = true, error = null, pendingUserText = content) }
+            _state.update {
+                it.copy(
+                    rewinding = true,
+                    error = null,
+                    draft = null,
+                    pendingUserText = if (resend && content.isNotEmpty()) content else it.pendingUserText,
+                )
+            }
             try {
                 withAuthRetry { api.rewindHistory(chatId, channel, historyId) }
                 loadHistoryOnce(replaceTurns = true)
-                _state.update { it.copy(rewinding = false) }
-                send(content)
+                _state.update {
+                    it.copy(
+                        rewinding = false,
+                        draft = if (resend) null else content.ifBlank { null },
+                    )
+                }
+                if (resend && content.isNotEmpty()) send(content)
             } catch (e: UnauthorizedException) {
                 _state.update {
                     it.copy(rewinding = false, pendingUserText = null, error = "登录已失效，请重新登录")
@@ -121,6 +135,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    /** UI 把 [ChatUiState.draft] 回填输入框后调用，避免重复消费。 */
+    fun consumeDraft() {
+        _state.update { if (it.draft == null) it else it.copy(draft = null) }
     }
 
     /**

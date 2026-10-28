@@ -30,7 +30,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
@@ -77,7 +76,6 @@ import dev.xbot.android.chat.ChatViewModel
 import dev.xbot.android.chat.IterationUi
 import dev.xbot.android.chat.TurnUi
 import dev.xbot.android.data.ModelEntry
-import dev.xbot.android.data.RewindResponse
 import dev.xbot.android.data.SessionModel
 import dev.xbot.android.logs.AppLog
 import dev.xbot.android.ui.components.AskUserDialog
@@ -88,7 +86,6 @@ import dev.xbot.android.ui.components.CopyOrSelectText
 import dev.xbot.android.ui.components.MarkdownText
 import dev.xbot.android.ui.components.ModelPickerSheet
 import dev.xbot.android.ui.components.EditMessageDialog
-import dev.xbot.android.ui.components.RewindDialog
 import dev.xbot.android.ui.components.ToolCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -244,7 +241,6 @@ fun ChatScreen(
     var availableModels by remember(chatId) { mutableStateOf<List<ModelEntry>>(emptyList()) }
     var modelsLoading by remember(chatId) { mutableStateOf(false) }
     var showModelPicker by remember(chatId) { mutableStateOf(false) }
-    var showRewind by remember(chatId) { mutableStateOf(false) }
     // 正在编辑的用户消息（非 null 即弹出「编辑并重新发送」对话框）
     var editingTurn by remember(chatId) { mutableStateOf<TurnUi?>(null) }
 
@@ -618,12 +614,6 @@ fun ChatScreen(
                         }
                     },
                     actions = {
-                        IconButton(
-                            onClick = { showRewind = true },
-                            enabled = !state.busy && state.turns.any { it.userHistoryId > 0L },
-                        ) {
-                            Icon(Icons.Filled.History, contentDescription = "回退")
-                        }
                         IconButton(onClick = vm::reload) {
                             Icon(Icons.Filled.Refresh, contentDescription = "重新加载")
                         }
@@ -836,6 +826,14 @@ fun ChatScreen(
         )
     }
 
+    // 「仅回退」把编辑后的文字交回来：填进输入框，不自动发送。
+    LaunchedEffect(state.draft) {
+        state.draft?.let { draft ->
+            input = draft
+            vm.consumeDraft()
+        }
+    }
+
     editingTurn?.let { turn ->
         EditMessageDialog(
             original = turn.userText,
@@ -844,29 +842,12 @@ fun ChatScreen(
             onConfirm = { edited ->
                 editingTurn = null
                 // 先拿到用户改好的内容，才发起 rewind + 重新发送（顺序在 VM 里保证）。
-                vm.rewindAndResend(turn.userHistoryId, edited)
+                vm.rewindTo(turn.userHistoryId, edited, resend = true)
             },
-        )
-    }
-
-    if (showRewind) {
-        RewindDialog(
-            turns = state.turns,
-            onDismiss = { showRewind = false },
-            onConfirm = { historyId ->
-                showRewind = false
-                scope.launch {
-                    runCatching {
-                        app.container.api.rewindHistory(chatId, channel, historyId)
-                    }.onSuccess { response ->
-                        if (response.draft.isNotBlank()) input = response.draft
-                        // 回退是「删掉」历史，必须整体替换，合并会把已回退的 turn 留在屏幕上。
-                        vm.reload(replaceTurns = true)
-                        snackbar.showSnackbar(rewindMessage(response))
-                    }.onFailure {
-                        snackbar.showSnackbar(it.message ?: "回退失败")
-                    }
-                }
+            onRewindOnly = { edited ->
+                editingTurn = null
+                // 只回退，什么都不发；编辑后的文字由 VM 放进 state.draft，再回填输入框。
+                vm.rewindTo(turn.userHistoryId, edited, resend = false)
             },
         )
     }
@@ -1184,22 +1165,3 @@ private fun ThinkingRow() {
     }
 }
 
-/**
- * 回退结果文案。历史与文件快照是两件独立的事：
- * `history_rewound` 为 false 表示历史没截断（回退实际没生效），
- * `files_rewound` 为 false 但 `checkpoint_error` 非空表示历史回退了、文件没恢复。
- * 这两件事都不能用一句"已回退"盖掉。
- */
-private fun rewindMessage(response: RewindResponse): String {
-    if (!response.historyRewound) {
-        val reason = response.checkpointError.ifBlank { "服务端未截断历史" }
-        return "回退未生效：$reason"
-    }
-    val draftNote = if (response.draft.isNotBlank()) "，原消息已放回输入框" else ""
-    return when {
-        response.filesRewound -> "已回退，文件改动已一并恢复$draftNote"
-        response.checkpointError.isNotBlank() ->
-            "已回退$draftNote（文件未回退：${response.checkpointError}）"
-        else -> "已回退$draftNote"
-    }
-}
