@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
@@ -86,6 +87,7 @@ import dev.xbot.android.ui.components.Composer
 import dev.xbot.android.ui.components.CopyOrSelectText
 import dev.xbot.android.ui.components.MarkdownText
 import dev.xbot.android.ui.components.ModelPickerSheet
+import dev.xbot.android.ui.components.EditMessageDialog
 import dev.xbot.android.ui.components.RewindDialog
 import dev.xbot.android.ui.components.ToolCard
 import kotlinx.coroutines.Dispatchers
@@ -243,6 +245,8 @@ fun ChatScreen(
     var modelsLoading by remember(chatId) { mutableStateOf(false) }
     var showModelPicker by remember(chatId) { mutableStateOf(false) }
     var showRewind by remember(chatId) { mutableStateOf(false) }
+    // 正在编辑的用户消息（非 null 即弹出「编辑并重新发送」对话框）
+    var editingTurn by remember(chatId) { mutableStateOf<TurnUi?>(null) }
 
     LaunchedEffect(chatId, channel) {
         vm.open(chatId, channel, title)
@@ -744,7 +748,12 @@ fun ChatScreen(
                             val liveTurnId = state.liveTurnId.takeIf { it > 0L }
                                 ?: state.turns.lastOrNull()?.turnId
                                 ?: 0L
-                            TurnBlock(turn = turn, running = state.busy && turn.turnId == liveTurnId)
+                            TurnBlock(
+                                turn = turn,
+                                running = state.busy && turn.turnId == liveTurnId,
+                                canEditUserMessage = canRewindTurn(turn, state.busy, state.rewinding),
+                                onEditMessage = { editingTurn = it },
+                            )
                         }
                         state.pendingUserText?.let { pending ->
                             item(key = "pending_user") {
@@ -823,6 +832,19 @@ fun ChatScreen(
                         snackbar.showSnackbar(it.message ?: "切换模型失败")
                     }
                 }
+            },
+        )
+    }
+
+    editingTurn?.let { turn ->
+        EditMessageDialog(
+            original = turn.userText,
+            busy = state.rewinding,
+            onDismiss = { editingTurn = null },
+            onConfirm = { edited ->
+                editingTurn = null
+                // 先拿到用户改好的内容，才发起 rewind + 重新发送（顺序在 VM 里保证）。
+                vm.rewindAndResend(turn.userHistoryId, edited)
             },
         )
     }
@@ -926,10 +948,19 @@ private fun LazyListState.isSettledAtBottom(): Boolean {
 }
 
 @Composable
-private fun TurnBlock(turn: TurnUi, running: Boolean) {
+private fun TurnBlock(
+    turn: TurnUi,
+    running: Boolean,
+    canEditUserMessage: Boolean = false,
+    onEditMessage: (TurnUi) -> Unit = {},
+) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (turn.userText.isNotBlank()) {
-            UserBubble(turn.userText)
+            UserBubble(
+                text = turn.userText,
+                canEdit = canEditUserMessage,
+                onEdit = { onEditMessage(turn) },
+            )
         }
 
         val answer = turn.finalAnswerText()
@@ -1086,24 +1117,49 @@ private fun ReasoningBlock(reasoning: String) {
 }
 
 @Composable
-private fun UserBubble(text: String) {
-    Row(
+private fun UserBubble(
+    text: String,
+    canEdit: Boolean = false,
+    onEdit: () -> Unit = {},
+) {
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End,
+        horizontalAlignment = Alignment.End,
     ) {
-        Surface(
-            color = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
-            modifier = Modifier.fillMaxWidth(0.86f),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
         ) {
-            CopyOrSelectText(text = text) {
-                AutoLinkText(
-                    text = text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    linkColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            Surface(
+                color = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
+                modifier = Modifier.fillMaxWidth(0.86f),
+            ) {
+                CopyOrSelectText(text = text) {
+                    AutoLinkText(
+                        text = text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        linkColor = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    )
+                }
+            }
+        }
+        // 编辑 = 回退到这条消息并重新发送。按钮贴着气泡下方，比顶栏的「回退」对话框快得多。
+        if (canEdit) {
+            TextButton(
+                onClick = onEdit,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                modifier = Modifier.height(30.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Edit,
+                    contentDescription = null,
+                    modifier = Modifier.size(13.dp),
                 )
+                Spacer(Modifier.width(4.dp))
+                Text("编辑", style = MaterialTheme.typography.labelSmall)
             }
         }
     }

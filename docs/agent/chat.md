@@ -37,6 +37,19 @@ SSE 侧由 reducer 标记 `ChatUiState.needsReload` + `reloadReplacesHistory`（
 `history_rewound`），ViewModel 消费时把后者传给 `reload(replaceTurns = ...)`。
 **不要只用 `needsReload` 一个布尔量**：`resync_required` 也用它，而那条路径必须是合并语义。
 
+## 回退（Rewind）的两条入口
+
+| 入口 | 行为 |
+|---|---|
+| 用户消息下方「编辑」按钮（0.4.15 起，主路径） | 弹出预填原文的编辑框 → **改完点确定才发起回退** → `rewind` → 等历史整体重载 → 用编辑后的文字重新发送 |
+| 顶栏 History 对话框 | 选一条历史消息 → `rewind` → 整体重载 → 把服务端返回的草稿放回输入框（不改内容时用） |
+
+顺序不能换：`ChatViewModel.rewindAndResend()` 里是 `rewindHistory` → `loadHistoryOnce(replaceTurns = true)` →
+`send()`。先发再重载会让新消息挂在旧列表上、SSE 回声多出一条；不重载直接发则界面上看起来像"发丢了"。
+
+能否编辑由 `ui/RewindRules.kt` 的 `canRewindTurn()` 判定（纯函数 + `RewindRulesTest`）：
+需要持久化 `userHistoryId > 0`、非空正文、当前没有回合在跑、也不在回退中（`ChatUiState.rewinding`）。
+
 ## 踩过的症状
 
 Rewind 在服务端已成功、客户端也解析对了响应，但屏幕上的消息不消失，**必须退出会话再重新进来**才正常。

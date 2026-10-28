@@ -65,24 +65,60 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             try {
-                val response = withAuthRetry {
-                    api.history(chatId, channel, historyLimit, 0)
-                }
-                _state.update { current ->
-                    if (!replaceTurns && current.turns.isNotEmpty() && current.oldestId > 0L) {
-                        ChatReducer.mergeLatestHistory(current, response)
-                    } else {
-                        ChatReducer.withHistory(current, response)
-                    }
-                }
-                restorePendingAskUser()
-                refreshContextBudget()
-            } catch (e: UnauthorizedException) {
-                _state.update { it.copy(loading = false, error = "登录已失效，请重新登录") }
-            } catch (e: Exception) {
-                _state.update { it.copy(loading = false, error = e.message ?: "加载失败") }
+                loadHistoryOnce(replaceTurns)
             } finally {
                 reloading = false
+            }
+        }
+    }
+
+    private suspend fun loadHistoryOnce(replaceTurns: Boolean) {
+        try {
+            val response = withAuthRetry {
+                api.history(chatId, channel, historyLimit, 0)
+            }
+            _state.update { current ->
+                if (!replaceTurns && current.turns.isNotEmpty() && current.oldestId > 0L) {
+                    ChatReducer.mergeLatestHistory(current, response)
+                } else {
+                    ChatReducer.withHistory(current, response)
+                }
+            }
+            restorePendingAskUser()
+            refreshContextBudget()
+        } catch (e: UnauthorizedException) {
+            _state.update { it.copy(loading = false, error = "登录已失效，请重新登录") }
+        } catch (e: Exception) {
+            _state.update { it.copy(loading = false, error = e.message ?: "加载失败") }
+        }
+    }
+
+    /**
+     * 回退到某条用户消息，并用**编辑后的文字**重新发送。
+     *
+     * 顺序是关键：先 `rewind`（服务端截断历史）→ 再等历史**整体重载**落地 → 最后才发。
+     * 如果先发再重载，新消息会挂在旧列表上，SSE 回声还会多出一条；如果只重载不等待，
+     * 发送时 `turns` 还是旧的，界面上看起来就像"消息发丢了"。
+     */
+    fun rewindAndResend(historyId: Long, text: String) {
+        if (chatId.isBlank() || historyId <= 0L) return
+        val content = text.trim()
+        if (content.isEmpty()) return
+        viewModelScope.launch {
+            _state.update { it.copy(rewinding = true, error = null, pendingUserText = content) }
+            try {
+                withAuthRetry { api.rewindHistory(chatId, channel, historyId) }
+                loadHistoryOnce(replaceTurns = true)
+                _state.update { it.copy(rewinding = false) }
+                send(content)
+            } catch (e: UnauthorizedException) {
+                _state.update {
+                    it.copy(rewinding = false, pendingUserText = null, error = "登录已失效，请重新登录")
+                }
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(rewinding = false, pendingUserText = null, error = e.message ?: "回退失败")
+                }
             }
         }
     }
