@@ -27,9 +27,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
@@ -76,7 +76,6 @@ import dev.xbot.android.chat.ChatViewModel
 import dev.xbot.android.chat.IterationUi
 import dev.xbot.android.chat.TurnUi
 import dev.xbot.android.data.ModelEntry
-import dev.xbot.android.data.RewindResponse
 import dev.xbot.android.data.SessionModel
 import dev.xbot.android.logs.AppLog
 import dev.xbot.android.ui.components.AskUserDialog
@@ -86,7 +85,7 @@ import dev.xbot.android.ui.components.Composer
 import dev.xbot.android.ui.components.CopyOrSelectText
 import dev.xbot.android.ui.components.MarkdownText
 import dev.xbot.android.ui.components.ModelPickerSheet
-import dev.xbot.android.ui.components.RewindDialog
+import dev.xbot.android.ui.components.EditMessageDialog
 import dev.xbot.android.ui.components.ToolCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -242,7 +241,8 @@ fun ChatScreen(
     var availableModels by remember(chatId) { mutableStateOf<List<ModelEntry>>(emptyList()) }
     var modelsLoading by remember(chatId) { mutableStateOf(false) }
     var showModelPicker by remember(chatId) { mutableStateOf(false) }
-    var showRewind by remember(chatId) { mutableStateOf(false) }
+    // 正在编辑的用户消息（非 null 即弹出「编辑并重新发送」对话框）
+    var editingTurn by remember(chatId) { mutableStateOf<TurnUi?>(null) }
 
     LaunchedEffect(chatId, channel) {
         vm.open(chatId, channel, title)
@@ -509,6 +509,24 @@ fun ChatScreen(
         }
     }
 
+    // 内容增长时粘底（sticky-bottom）。
+    //
+    // 配速渲染让正文每帧长一点点，靠「尾部指纹」触发贴底会滞后一整个合批窗口，看起来
+    // 最后一行被压着。这里直接盯布局：跟随状态下最后一项超出视口多少就补多少，
+    // 单次 scrollBy 同帧生效，不产生中间帧。用户手一碰（isScrollInProgress）就停手。
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            Triple(info.totalItemsCount, last?.index ?: -1, (last?.offset ?: 0) + (last?.size ?: 0))
+        }.collect { (count, lastIndex, lastEnd) ->
+            if (!latestFollow || count == 0 || listState.isScrollInProgress) return@collect
+            if (lastIndex != count - 1) return@collect
+            val deficit = lastEnd - listState.layoutInfo.viewportEndOffset
+            if (deficit > 0) listState.scrollBy(deficit.toFloat())
+        }
+    }
+
     val attachmentChips = attachments.map {
         AttachmentChip(
             name = it.name,
@@ -596,12 +614,6 @@ fun ChatScreen(
                         }
                     },
                     actions = {
-                        IconButton(
-                            onClick = { showRewind = true },
-                            enabled = !state.busy && state.turns.any { it.userHistoryId > 0L },
-                        ) {
-                            Icon(Icons.Filled.History, contentDescription = "回退")
-                        }
                         IconButton(onClick = vm::reload) {
                             Icon(Icons.Filled.Refresh, contentDescription = "重新加载")
                         }
@@ -726,7 +738,12 @@ fun ChatScreen(
                             val liveTurnId = state.liveTurnId.takeIf { it > 0L }
                                 ?: state.turns.lastOrNull()?.turnId
                                 ?: 0L
-                            TurnBlock(turn = turn, running = state.busy && turn.turnId == liveTurnId)
+                            TurnBlock(
+                                turn = turn,
+                                running = state.busy && turn.turnId == liveTurnId,
+                                canEditUserMessage = canRewindTurn(turn, state.busy, state.rewinding),
+                                onEditMessage = { editingTurn = it },
+                            )
                         }
                         state.pendingUserText?.let { pending ->
                             item(key = "pending_user") {
@@ -809,24 +826,28 @@ fun ChatScreen(
         )
     }
 
-    if (showRewind) {
-        RewindDialog(
-            turns = state.turns,
-            onDismiss = { showRewind = false },
-            onConfirm = { historyId ->
-                showRewind = false
-                scope.launch {
-                    runCatching {
-                        app.container.api.rewindHistory(chatId, channel, historyId)
-                    }.onSuccess { response ->
-                        if (response.draft.isNotBlank()) input = response.draft
-                        // 回退是「删掉」历史，必须整体替换，合并会把已回退的 turn 留在屏幕上。
-                        vm.reload(replaceTurns = true)
-                        snackbar.showSnackbar(rewindMessage(response))
-                    }.onFailure {
-                        snackbar.showSnackbar(it.message ?: "回退失败")
-                    }
-                }
+    // 「仅回退」把编辑后的文字交回来：填进输入框，不自动发送。
+    LaunchedEffect(state.draft) {
+        state.draft?.let { draft ->
+            input = draft
+            vm.consumeDraft()
+        }
+    }
+
+    editingTurn?.let { turn ->
+        EditMessageDialog(
+            original = turn.userText,
+            busy = state.rewinding,
+            onDismiss = { editingTurn = null },
+            onConfirm = { edited ->
+                editingTurn = null
+                // 先拿到用户改好的内容，才发起 rewind + 重新发送（顺序在 VM 里保证）。
+                vm.rewindTo(turn.userHistoryId, edited, resend = true)
+            },
+            onRewindOnly = { edited ->
+                editingTurn = null
+                // 只回退，什么都不发；编辑后的文字由 VM 放进 state.draft，再回填输入框。
+                vm.rewindTo(turn.userHistoryId, edited, resend = false)
             },
         )
     }
@@ -908,10 +929,19 @@ private fun LazyListState.isSettledAtBottom(): Boolean {
 }
 
 @Composable
-private fun TurnBlock(turn: TurnUi, running: Boolean) {
+private fun TurnBlock(
+    turn: TurnUi,
+    running: Boolean,
+    canEditUserMessage: Boolean = false,
+    onEditMessage: (TurnUi) -> Unit = {},
+) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (turn.userText.isNotBlank()) {
-            UserBubble(turn.userText)
+            UserBubble(
+                text = turn.userText,
+                canEdit = canEditUserMessage,
+                onEdit = { onEditMessage(turn) },
+            )
         }
 
         val answer = turn.finalAnswerText()
@@ -920,11 +950,12 @@ private fun TurnBlock(turn: TurnUi, running: Boolean) {
             ProcessBlock(turn = turn, process = process, answer = answer, running = running)
         }
 
-        // 最终答复永远显示，不参与折叠。
+        // 最终答复永远显示，不参与折叠；流式时按配速推进（见 ui/TextReveal.kt）。
         if (answer.isNotBlank()) {
             CopyOrSelectText(text = answer) {
-                MarkdownText(
+                PacedMarkdown(
                     text = answer,
+                    streaming = running,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
@@ -1003,8 +1034,11 @@ private fun ProcessBlock(
                 }
                 if (iteration.content.isNotBlank() && iteration.content != answer) {
                     CopyOrSelectText(text = iteration.content) {
-                        MarkdownText(
+                        PacedMarkdown(
                             text = iteration.content,
+                            // 只有「正在进行的那一轮的最后一个 iteration」才配速，
+                            // 其余都是已经写完的过程旁白。
+                            streaming = running && iteration === turn.iterations.lastOrNull(),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 4.dp),
@@ -1064,24 +1098,49 @@ private fun ReasoningBlock(reasoning: String) {
 }
 
 @Composable
-private fun UserBubble(text: String) {
-    Row(
+private fun UserBubble(
+    text: String,
+    canEdit: Boolean = false,
+    onEdit: () -> Unit = {},
+) {
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End,
+        horizontalAlignment = Alignment.End,
     ) {
-        Surface(
-            color = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
-            modifier = Modifier.fillMaxWidth(0.86f),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
         ) {
-            CopyOrSelectText(text = text) {
-                AutoLinkText(
-                    text = text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    linkColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            Surface(
+                color = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
+                modifier = Modifier.fillMaxWidth(0.86f),
+            ) {
+                CopyOrSelectText(text = text) {
+                    AutoLinkText(
+                        text = text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        linkColor = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    )
+                }
+            }
+        }
+        // 编辑 = 回退到这条消息并重新发送。按钮贴着气泡下方，比顶栏的「回退」对话框快得多。
+        if (canEdit) {
+            TextButton(
+                onClick = onEdit,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                modifier = Modifier.height(30.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Edit,
+                    contentDescription = null,
+                    modifier = Modifier.size(13.dp),
                 )
+                Spacer(Modifier.width(4.dp))
+                Text("编辑", style = MaterialTheme.typography.labelSmall)
             }
         }
     }
@@ -1106,22 +1165,3 @@ private fun ThinkingRow() {
     }
 }
 
-/**
- * 回退结果文案。历史与文件快照是两件独立的事：
- * `history_rewound` 为 false 表示历史没截断（回退实际没生效），
- * `files_rewound` 为 false 但 `checkpoint_error` 非空表示历史回退了、文件没恢复。
- * 这两件事都不能用一句"已回退"盖掉。
- */
-private fun rewindMessage(response: RewindResponse): String {
-    if (!response.historyRewound) {
-        val reason = response.checkpointError.ifBlank { "服务端未截断历史" }
-        return "回退未生效：$reason"
-    }
-    val draftNote = if (response.draft.isNotBlank()) "，原消息已放回输入框" else ""
-    return when {
-        response.filesRewound -> "已回退，文件改动已一并恢复$draftNote"
-        response.checkpointError.isNotBlank() ->
-            "已回退$draftNote（文件未回退：${response.checkpointError}）"
-        else -> "已回退$draftNote"
-    }
-}
