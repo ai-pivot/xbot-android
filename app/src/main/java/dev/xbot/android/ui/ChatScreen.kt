@@ -509,6 +509,24 @@ fun ChatScreen(
         }
     }
 
+    // 内容增长时粘底（sticky-bottom）。
+    //
+    // 配速渲染让正文每帧长一点点，靠「尾部指纹」触发贴底会滞后一整个合批窗口，看起来
+    // 最后一行被压着。这里直接盯布局：跟随状态下最后一项超出视口多少就补多少，
+    // 单次 scrollBy 同帧生效，不产生中间帧。用户手一碰（isScrollInProgress）就停手。
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            Triple(info.totalItemsCount, last?.index ?: -1, (last?.offset ?: 0) + (last?.size ?: 0))
+        }.collect { (count, lastIndex, lastEnd) ->
+            if (!latestFollow || count == 0 || listState.isScrollInProgress) return@collect
+            if (lastIndex != count - 1) return@collect
+            val deficit = lastEnd - listState.layoutInfo.viewportEndOffset
+            if (deficit > 0) listState.scrollBy(deficit.toFloat())
+        }
+    }
+
     val attachmentChips = attachments.map {
         AttachmentChip(
             name = it.name,
@@ -920,11 +938,12 @@ private fun TurnBlock(turn: TurnUi, running: Boolean) {
             ProcessBlock(turn = turn, process = process, answer = answer, running = running)
         }
 
-        // 最终答复永远显示，不参与折叠。
+        // 最终答复永远显示，不参与折叠；流式时按配速推进（见 ui/TextReveal.kt）。
         if (answer.isNotBlank()) {
             CopyOrSelectText(text = answer) {
-                MarkdownText(
+                PacedMarkdown(
                     text = answer,
+                    streaming = running,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
@@ -1003,8 +1022,11 @@ private fun ProcessBlock(
                 }
                 if (iteration.content.isNotBlank() && iteration.content != answer) {
                     CopyOrSelectText(text = iteration.content) {
-                        MarkdownText(
+                        PacedMarkdown(
                             text = iteration.content,
+                            // 只有「正在进行的那一轮的最后一个 iteration」才配速，
+                            // 其余都是已经写完的过程旁白。
+                            streaming = running && iteration === turn.iterations.lastOrNull(),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 4.dp),

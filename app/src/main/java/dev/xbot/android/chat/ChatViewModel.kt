@@ -218,9 +218,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val client = XbotSseClient(api, prefs, viewModelScope)
         sse = client
         eventsJob = viewModelScope.launch {
-            client.events.collect { message ->
+            // 合批：一条事件进来先处理（leading），随后 60ms 内到达的攒成一批一起 apply，
+            // 避免每来一条 progress 就重组一次（流式时的重组/重排风暴）。
+            client.events.batchByWindow().collect { batch ->
                 val wasBusy = _state.value.busy
-                _state.update { ChatReducer.applyEvent(it, message) }
+                _state.update { state ->
+                    batch.fold(state) { acc, message -> ChatReducer.applyEvent(acc, message) }
+                }
                 // 回合结束（busy 由 true 转 false）时服务端才拿到最终 token 数，
                 // 这时刷新一次上下文预算，指示器才不会停在回合中途的估值上。
                 if (wasBusy && !_state.value.busy) refreshContextBudget()
