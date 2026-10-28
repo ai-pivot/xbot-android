@@ -27,11 +27,11 @@ class ImageUrlTest {
     @Test
     fun `localhost absolute url is rewritten to the configured media base`() {
         assertEquals(
-            "https://minio.cjiw.site/uploads/a.png",
+            "https://media.example.com/uploads/a.png",
             resolveImageUrl(
                 base,
                 "http://localhost:9000/uploads/a.png",
-                "https://minio.cjiw.site",
+                "https://media.example.com",
             ),
         )
     }

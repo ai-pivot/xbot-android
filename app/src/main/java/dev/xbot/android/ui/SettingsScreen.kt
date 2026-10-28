@@ -156,7 +156,7 @@ fun SettingsScreen(
                         prefs.mediaBaseUrl = it
                     },
                     label = { Text("媒体/对象存储地址") },
-                    placeholder = { Text("https://minio.cjiw.site") },
+                    placeholder = { Text("https://media.example.com") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
