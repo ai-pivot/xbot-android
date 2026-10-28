@@ -1,5 +1,6 @@
 package dev.xbot.android.data
 
+import dev.xbot.android.logs.AppLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
@@ -17,7 +18,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
+import okio.source
+import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
 /**
@@ -229,18 +234,25 @@ class XbotApi(private val prefs: AppPrefs) {
         execute(post("/api/ask_user/respond", body))
     }
 
+    /**
+     * 上传单个附件（**流式**）。
+     *
+     * 用 [open] 打开数据流直接写进请求体，不再先 `readBytes()` 整个文件 —— 多附件
+     * （最多 5 × 10MB）时峰值内存从「所有文件之和」降到单次缓冲大小。
+     *
+     * [contentLength] 必须是真实字节数：服务端用 `MaxBytesReader` 卡 10MB，
+     * 长度未知（chunked）会被直接拒绝。
+     */
     suspend fun uploadFile(
-        bytes: ByteArray,
         fileName: String,
         mime: String,
+        contentLength: Long,
+        open: () -> InputStream,
     ): UploadResponse {
+        val fileBody = StreamingFileBody(mime = mime, length = contentLength, open = open)
         val part = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart(
-                "file",
-                fileName,
-                bytes.toRequestBody(mime.toMediaType()),
-            )
+            .addFormDataPart("file", fileName, fileBody)
             .build()
         val text = execute(
             Request.Builder()
@@ -251,9 +263,33 @@ class XbotApi(private val prefs: AppPrefs) {
         return decodeEnvelope(text)
     }
 
-    // ------------------------------------------------------------------
-    // RPC (existing /api/rpc dispatch table — unchanged)
-    // ------------------------------------------------------------------
+    /**
+     * 上传单个附件的**兼容路径**：先把文件读成字节，再整体 POST。
+     *
+     * 只在流式上传失败时兜底使用（个别 provider 的 `content://` 流长度与
+     * `OpenableColumns.SIZE` 对不上，OkHttp 会抛 `unexpected end of stream`）。
+     */
+    suspend fun uploadFileBytes(
+        bytes: ByteArray,
+        fileName: String,
+        mime: String,
+    ): UploadResponse {
+        val fileBody = runCatching { mime.toMediaType() }
+            .getOrNull()
+            ?.let { bytes.toRequestBody(it) }
+            ?: bytes.toRequestBody()
+        val part = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("file", fileName, fileBody)
+            .build()
+        val text = execute(
+            Request.Builder()
+                .url(urlBuilder("/api/files/upload").build())
+                .post(part)
+                .build(),
+        )
+        return decodeEnvelope(text)
+    }
 
     suspend fun rpc(method: String, params: JsonObject = JsonObject(emptyMap())): JsonElement {
         val body = buildJsonObject {
@@ -519,23 +555,33 @@ class XbotApi(private val prefs: AppPrefs) {
     }
 
     private suspend fun execute(request: Request): String = withContext(Dispatchers.IO) {
-        client.newCall(request).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                val error = runCatching {
-                    XbotJson.decodeFromString<ApiEnvelope<JsonElement>>(text).error
-                }.getOrNull()
-                if (response.code == 401) {
-                    throw UnauthorizedException(error?.message ?: "登录已失效，请重新登录")
-                }
-                throw ApiException(
-                    code = error?.code ?: "http_${response.code}",
-                    message = error?.message ?: "HTTP ${response.code}",
-                    httpStatus = response.code,
-                )
+        val startedAt = System.currentTimeMillis()
+        val label = "${request.method} ${request.url.encodedPath}"
+        val (code, text) = try {
+            client.newCall(request).execute().use { response ->
+                response.code to (response.body?.string().orEmpty())
             }
-            text
+        } catch (e: Exception) {
+            AppLog.e("http", "$label 失败（${System.currentTimeMillis() - startedAt}ms）", e)
+            throw e
         }
+        val cost = System.currentTimeMillis() - startedAt
+        if (code !in 200..299) {
+            AppLog.w("http", "$label → $code ${text.take(300)}（${cost}ms）")
+            val error = runCatching {
+                XbotJson.decodeFromString<ApiEnvelope<JsonElement>>(text).error
+            }.getOrNull()
+            if (code == 401) {
+                throw UnauthorizedException(error?.message ?: "登录已失效，请重新登录")
+            }
+            throw ApiException(
+                code = error?.code ?: "http_$code",
+                message = error?.message ?: "HTTP $code",
+                httpStatus = code,
+            )
+        }
+        AppLog.d("http", "$label → $code ${text.length}B（${cost}ms）")
+        text
     }
 
     private inline fun <reified T> decodeEnvelope(text: String): T {
@@ -562,6 +608,10 @@ class XbotApi(private val prefs: AppPrefs) {
             (normalizeBaseUrl(prefs.serverUrl) + path).toHttpUrlOrNull()
                 ?: throw ApiException("bad_url", "服务器地址无效：${prefs.serverUrl}")
             ).newBuilder()
+
+    /** 上传后拿到的 key 拼成可直接在浏览器打开的下载地址（日志包分享用）。 */
+    fun downloadUrl(uploadKey: String): String =
+        normalizeBaseUrl(prefs.serverUrl) + "/api/files/download?key=" + encodePath(uploadKey)
 
     private fun encodePath(value: String): String =
         java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")

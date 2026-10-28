@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -17,9 +19,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,8 +40,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.xbot.android.chat.ContextBudgetUi
+
+/** 输入区里一个附件 chip 的展示状态（由 ChatScreen 的附件状态机投影而来）。 */
+data class AttachmentChip(
+    val name: String,
+    val uploading: Boolean = false,
+    val failed: String? = null,
+)
 
 /**
  * 底部输入区。
@@ -45,14 +57,18 @@ import dev.xbot.android.chat.ContextBudgetUi
  * 高度按「一行文字」压缩过：`OutlinedTextField` 自带 56dp 的最小高度（装饰盒内固定），
  * 换成了 `BasicTextField` + 自己的圆角背景，行高约 36dp，整条输入区比原来矮 20dp 左右。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Composer(
     text: String,
     onTextChange: (String) -> Unit,
     busy: Boolean,
-    attachmentName: String?,
+    attachments: List<AttachmentChip> = emptyList(),
+    uploadingLabel: String? = null,
+    attachmentsReady: Boolean = true,
     onPickAttachment: () -> Unit,
-    onClearAttachment: () -> Unit,
+    onRemoveAttachment: (Int) -> Unit,
+    onRetryAttachment: (Int) -> Unit = {},
     onSend: () -> Unit,
     onCancel: () -> Unit,
     sending: Boolean = false,
@@ -60,6 +76,8 @@ fun Composer(
     cwd: String = "",
 ) {
     var showBudget by remember { mutableStateOf(false) }
+    // 有附件时允许只发附件；但附件还在上传/失败时不能发（否则会被静默丢掉）。
+    val canSend = (text.isNotBlank() || attachments.isNotEmpty()) && !sending && attachmentsReady
 
     Surface(
         tonalElevation = 3.dp,
@@ -73,34 +91,82 @@ fun Composer(
                 .navigationBarsPadding()
                 .padding(horizontal = 8.dp, vertical = 6.dp),
         ) {
-            if (attachmentName != null) {
-                Row(
+            if (attachments.isNotEmpty()) {
+                // 多个附件用 FlowRow 自动换行，最多 MAX_ATTACHMENTS 个 chip。
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    AssistChip(
-                        onClick = {},
-                        label = {
-                            Text(
-                                attachmentName,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                            )
-                        },
-                        trailingIcon = {
-                            IconButton(
-                                onClick = onClearAttachment,
-                                modifier = Modifier.size(20.dp),
-                            ) {
-                                Icon(
-                                    Icons.Filled.Close,
-                                    contentDescription = "移除附件",
-                                    modifier = Modifier.size(14.dp),
+                    attachments.forEachIndexed { index, chip ->
+                        AssistChip(
+                            onClick = {},
+                            label = {
+                                Text(
+                                    chip.name,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = if (chip.failed != null) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        Color.Unspecified
+                                    },
+                                    modifier = Modifier.widthIn(max = 150.dp),
                                 )
-                            }
-                        },
-                    )
+                            },
+                            trailingIcon = {
+                                when {
+                                    chip.uploading -> CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+
+                                    chip.failed != null -> Row {
+                                        IconButton(
+                                            onClick = { onRetryAttachment(index) },
+                                            modifier = Modifier.size(20.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Refresh,
+                                                contentDescription = "重新上传 ${chip.name}",
+                                                modifier = Modifier.size(14.dp),
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { onRemoveAttachment(index) },
+                                            modifier = Modifier.size(20.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Close,
+                                                contentDescription = "移除附件 ${chip.name}",
+                                                modifier = Modifier.size(14.dp),
+                                            )
+                                        }
+                                    }
+
+                                    else -> IconButton(
+                                        onClick = { onRemoveAttachment(index) },
+                                        modifier = Modifier.size(20.dp),
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Close,
+                                            contentDescription = "移除附件 ${chip.name}",
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                    }
+                                }
+                            },
+                        )
+                    }
                 }
+            }
+            if (uploadingLabel != null) {
+                Text(
+                    uploadingLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
             }
             // 工作目录与上下文占用同处一行、整体居中：两者都没有时这一行不存在。
             if (cwd.isNotBlank() || contextBudget != null) {
@@ -154,8 +220,8 @@ fun Composer(
                 CompactIconButton(
                     icon = Icons.AutoMirrored.Filled.Send,
                     description = "发送",
-                    enabled = text.isNotBlank() && !sending,
-                    tint = if (text.isNotBlank()) {
+                    enabled = canSend,
+                    tint = if (canSend) {
                         MaterialTheme.colorScheme.primary
                     } else {
                         MaterialTheme.colorScheme.outline

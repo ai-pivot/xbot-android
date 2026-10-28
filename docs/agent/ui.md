@@ -29,6 +29,14 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
 ## 聊天页结构（ui/ChatScreen.kt）
 
 - `Scaffold(topBar = TopAppBar, bottomBar = Composer, snackbarHost = ...)`，内容区是 `LazyColumn`。
+- **单个 iteration 的渲染顺序固定为「思考 → 正文 → 工具」**（`ProcessBlock` 展开态），跟模型真实
+  产出顺序一致。别把正文排到工具后面：那样「先说结论、再执行」的回合会看起来像倒放
+  （0.4.11 修的就是这个）。
+- **一轮的过程整体折叠成一行**（0.4.12，`ui/TurnProcess.kt` + `ProcessBlock`）：
+  思考 / 过程旁白 / 工具全收进折叠条 `过程 · 思考 3 · 工具 6`，运行中自动展开并显示
+  `过程 · 正在 Shell`，结束自动收起，用户手动点过之后按用户的来。
+  **最终答复（`finalAnswerText()`）永远显示、不参与折叠**；判断哪些正文算「过程旁白」
+  也在 `TurnProcess.kt`（纯函数 + `TurnProcessTest`）。
 - 贴底（auto-follow）逻辑在 `ui/ChatScroll.kt`（纯函数，`ChatScrollTest` 覆盖），ChatScreen 只喂事件：
   - 「尾部指纹」`tailFingerprint()` **不含 `turns.size`**：上滑补页是往前面插入历史，
     长度变了但尾部没变，用长度判断会把用户拽回底部（0.4.1 修的）。
@@ -47,6 +55,11 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
     一个像素都不消费 —— 停在最后一项顶部。新一轮对话里 TurnBlock 的开头正是用户气泡，
     所以症状会表现为「跳到了用户那条消息」。`withFrameNanos` 回调也排在 layout 之前，
     必须**等两帧**再判断/再滚（见 `scrollToBottom`）。
+  - **最后一项可见时绝不能再调 `scrollToItem`**（0.4.10）：它会把该项顶部对齐视口顶部，
+    补回底部的 `scrollBy` 下一帧才生效 —— 中间那一帧就是「跳到这条消息开头」。流式输出
+    时贴底每几十毫秒一次，表现为持续抖动（日志里 `pin start`/`pin done` 每秒十几对，
+    而且 `canFwd=false` 还在 pin）。正确做法是只补「内容超出视口底部的距离」：
+    `scrollBy(last.offset + last.size - viewportEndOffset)`，单次滚动同帧生效、无中间帧。
   - 上滑补页的锚点恢复只在「列表仍停在请求那一刻的位置」时纠正索引
     （`shouldRestoreAnchor`：offset 未变 + 期间没有新滚动 + 索引真的变了）。
     少了这个守卫，补页回来会把已经贴底/被用户滑走的列表拽回请求时的位置 ——
@@ -55,7 +68,8 @@ Typography**，所以字号一律显式写 `MaterialTheme.typography.*`，别依
   - 跟随尾部要用**单个长生命周期 collector**（`snapshotFlow { tail }` 在
     `LaunchedEffect(listState)` 里），不要用以 `tail` 为 key 的 `LaunchedEffect`：
     后者每次尾部变化都取消上一次协程，滚动做到一半被取消就又停到最后一项顶部。
-  - 复现类问题用设置 → 滚动诊断（`ui/ChatScrollTrace.kt`）：环形记录最近 200 条滚动事件
+  - 复现类问题用「设置 → 日志」（`logs/AppLog.kt`，见 `docs/agent/logs.md`）：
+    滚动事件按 tag `scroll` 记录，直接在里面筛 `pin` / `anchor` / `scroll`。
     与布局快照，也能从 logcat 标签 `ChatScroll` 取。
 - 历史补页靠边界触发（`isScrollInProgress to firstVisibleItemIndex` + `pendingAnchor` 还原位置），
   不要用 `LaunchedEffect(Unit)` 一次性补页。

@@ -17,6 +17,34 @@ Material3 的 `OutlinedTextField` / `TextField` 在**装饰盒内部**写死了 
 图标按钮同理由默认 48dp 压到 36dp（`Modifier.size(36.dp)` + `Icon` 20dp），行内 `spacedBy(2.dp)`，
 整条输入区（含 `imePadding` / `navigationBarsPadding` 之外的 6dp 内边距）在单行时约 48dp。
 
+## 附件（多选 + 选中即上传）
+
+- 状态在 `ChatScreen.kt`：`attachments: List<PendingAttachment>`，每项带
+  `state: AttachmentState`（`Queued / Uploading / Done(uploadKey) / Failed(reason)`，
+  定义在 `ui/AttachmentRules.kt`）。0.4.6 之前是单个可空值。
+- 选择器用 `ActivityResultContracts.GetMultipleContents()`；每个 Uri 通过
+  `ContentResolver.query` 拿 `DISPLAY_NAME` / `SIZE`，`getType()` 兜底
+  `application/octet-stream`。同一个 Uri 重复选中只保留一份。
+- **选中即上传**（与 Web 端一致，0.4.7 起）：`uploadAttachment()` 在文件加入列表后立刻
+  发起上传，不等「发送」。理由：5×10MB 在移动网点发送后等半分钟像卡死；提前传完点发送几乎是瞬发。
+  最多 2 个并发（`Semaphore(2)`），其余排队。代价是用户选了不发会在服务端留下未引用的
+  对象 —— 由服务端清理，客户端不管。
+- **流式上传**：`XbotApi.uploadFile(fileName, mime, contentLength, open: () -> InputStream)`
+  用 `data/StreamingFileBody` 把 `InputStream` 直接写进请求体，不再 `readBytes()`。
+  两个坑：`contentLength` 必须与流实际长度一致（OkHttp 不等会抛 `unexpected end of stream`），
+  `contentType` 解析失败不能在 IO 线程抛（统一回退 `application/octet-stream`）。
+  流式失败会**自动回退**到 `uploadFileBytes`（整块读进内存）—— 个别 provider 的
+  `content://` 流长度和 `OpenableColumns.SIZE` 对不上，纯流式会永远失败。
+  这块有 `StreamingFileBodyTest`（MockWebServer 真发包）钉住 Content-Length 与字节完整性。
+- 上传失败要**把原因说出来**：底部 snackbar 显示具体异常信息，并写入设置 →
+  滚动 / 上传诊断。只画红 chip 什么也查不到。
+- **限制在 `ui/AttachmentRules.kt`（纯函数 + `AttachmentRulesTest`）**：
+  最多 `MAX_ATTACHMENTS = 5` 个、单个 `MAX_ATTACHMENT_BYTES = 10MB`
+  （服务端 `channel/web/web_file.go` 的 `maxFileSize = 10 << 20`，超了 413）。
+  空文件 / 超限 / 超额会被跳过并合并成一条 snackbar 提示。
+- **发送门控**：`attachmentsReady()` 要求每个附件都是 `Done`；有上传中或失败的就不让发
+  （失败 chip 显示红色 + 「重试」按钮），避免静默丢文件。发送只带 `Done.uploadKey`。
+
 ## 上下文预算的数据来源
 
 只有一条真实数据源：`POST /api/session/status`（服务端 `channel/web/web_rest.go: handleSessionStatus`）。

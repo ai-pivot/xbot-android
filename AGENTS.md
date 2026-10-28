@@ -49,8 +49,6 @@ iteration 按序号合并，checkpoint 替换 / delta 追加，收到 turn 结�
   `Unexpected symbol 't' in numeric literal`，而这时服务端其实已经执行成功了（Rewind 就栽在这上面）。
 - **`release.yml` 会把 `CHANGELOG.md` 全文当作更新说明**（文件不存在时退化成 `Release x.y.z`）；
   该文件按版本分段维护，改动时保持 `## [x.y.z]` 小节标题格式。
-- **MinIO 用 `xbotlan` 别名**（`127.0.0.1:9000`）写 `uploads/share/android/`，公网前缀是
-  `https://minio.cjiw.site/uploads/share/android/`；`local` 别名签名已失效，别用。
 
 ## 知识文件
 
@@ -58,6 +56,7 @@ iteration 按序号合并，checkpoint 替换 / delta 追加，收到 turn 结�
 - `docs/agent/chat.md` — 历史装载的两条路径（替换 vs 合并）、Rewind 后为什么必须整体重载
 - `docs/agent/ui.md` — Compose 界面约定、TopAppBar 布局陷阱、聊天页结构
 - `docs/agent/ui-composer.md` — 输入区高度（为什么必须 `BasicTextField`）、上下文预算指示器的数据来源与三种口径
+- `docs/agent/logs.md` — 端侧日志（AppLog / 日志页 / 打包上传 / 脱敏约定），排查问题先看这里
 
 ## 约定
 

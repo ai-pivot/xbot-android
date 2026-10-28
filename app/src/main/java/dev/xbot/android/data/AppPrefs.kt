@@ -112,7 +112,7 @@ class AppPrefs(context: Context) {
 
     /**
      * Public origin used to rewrite localhost/127.0.0.1 image URLs
-     * (e.g. https://minio.cjiw.site). Empty disables rewriting.
+     * (e.g. https://media.example.com). Empty disables rewriting.
      */
     var mediaBaseUrl: String
         get() = prefs.getString(KEY_MEDIA_URL, DEFAULT_MEDIA_BASE_URL).orEmpty()
@@ -182,4 +182,8 @@ class AppPrefs(context: Context) {
     }
 }
 
-const val DEFAULT_MEDIA_BASE_URL = "https://minio.cjiw.site"
+/**
+ * 默认不重写图片地址（空串 = 关闭）：这是每个部署自己的对象存储域名，
+ * 不该硬编码在客户端里。需要在「设置 → 媒体地址」里自行填写。
+ */
+const val DEFAULT_MEDIA_BASE_URL = ""

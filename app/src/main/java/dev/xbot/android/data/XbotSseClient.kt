@@ -1,5 +1,6 @@
 package dev.xbot.android.data
 
+import dev.xbot.android.logs.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -39,6 +40,17 @@ class XbotSseClient(
     private val prefs: AppPrefs,
     private val scope: CoroutineScope,
 ) {
+    private companion object {
+        /** 流式内容类事件太多，不逐条写日志，只记结构性事件。 */
+        val NOISY_EVENTS = setOf(
+            "progress",
+            "progress_structured",
+            "sync_progress",
+            "stream_content",
+            "text",
+        )
+    }
+
     private val _events = MutableSharedFlow<WsMessage>(
         extraBufferCapacity = 512,
         onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
@@ -106,6 +118,7 @@ class XbotSseClient(
                 attempt = 0
                 lastActivityAt = System.currentTimeMillis()
                 _state.value = SseState.Connected
+                AppLog.i("sse", "connected chat=$chatId channel=$channel")
             }
 
             override fun onEvent(
@@ -128,7 +141,12 @@ class XbotSseClient(
                 val message = runCatching {
                     XbotJson.decodeFromString<WsMessage>(data)
                 }.getOrNull() ?: return
-                _events.tryEmit(message.copy(type = message.type.ifBlank { type.orEmpty() }))
+                // 流式内容每几毫秒一条，不逐条落日志；只记「结构性」事件。
+                val resolved = message.copy(type = message.type.ifBlank { type.orEmpty() })
+                if (resolved.type !in NOISY_EVENTS) {
+                    AppLog.d("sse", "event ${resolved.type} ${data.length}B")
+                }
+                _events.tryEmit(resolved)
             }
 
             override fun onClosed(eventSource: EventSource) {
@@ -167,6 +185,7 @@ class XbotSseClient(
             Random.nextLong(0, 500)
         attempt += 1
         _state.value = SseState.Error(reason)
+        AppLog.w("sse", "reconnect in ${waitMs}ms: $reason (attempt=$attempt)")
         reconnectJob = scope.launch {
             delay(waitMs)
             if (shouldRun) connect()

@@ -76,12 +76,17 @@ fun XbotNavHost(deepLinkChatId: String? = null) {
                 onBack = { nav.popBackStack() },
                 onOpenTools = { nav.navigate("tools") },
                 onOpenModels = { nav.navigate("models") },
+                onOpenLogs = { nav.navigate("logs") },
                 onLogout = {
                     nav.navigate("login") {
                         popUpTo("sessions") { inclusive = true }
                     }
                 },
             )
+        }
+
+        composable("logs") {
+            LogsScreen(onBack = { nav.popBackStack() })
         }
 
         composable("tools") {

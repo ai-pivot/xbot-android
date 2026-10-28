@@ -78,7 +78,9 @@ import dev.xbot.android.chat.TurnUi
 import dev.xbot.android.data.ModelEntry
 import dev.xbot.android.data.RewindResponse
 import dev.xbot.android.data.SessionModel
+import dev.xbot.android.logs.AppLog
 import dev.xbot.android.ui.components.AskUserDialog
+import dev.xbot.android.ui.components.AttachmentChip
 import dev.xbot.android.ui.components.AutoLinkText
 import dev.xbot.android.ui.components.Composer
 import dev.xbot.android.ui.components.CopyOrSelectText
@@ -88,6 +90,8 @@ import dev.xbot.android.ui.components.RewindDialog
 import dev.xbot.android.ui.components.ToolCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
@@ -96,6 +100,7 @@ private data class PendingAttachment(
     val name: String,
     val mime: String,
     val size: Long,
+    val state: AttachmentState = AttachmentState.Queued,
 )
 
 private data class PrependAnchor(
@@ -204,7 +209,7 @@ fun ChatScreen(
         val moved = anchor.epoch != scrollEpoch ||
             listState.firstVisibleItemScrollOffset != anchor.offset
         if (moved) {
-            ChatScrollTrace.record("anchor skip (moved) ${listState.snapshot()}")
+            AppLog.i("scroll", "anchor skip (moved) ${listState.snapshot()}")
             pendingAnchor = null
             return@LaunchedEffect
         }
@@ -220,7 +225,7 @@ fun ChatScreen(
                     targetIndex = target,
                 )
             ) {
-                ChatScrollTrace.record("anchor restore turn=${anchor.turnId} idx=$target ${listState.snapshot()}")
+                AppLog.i("scroll", "anchor restore turn=${anchor.turnId} idx=$target ${listState.snapshot()}")
                 listState.scrollToItem(target, anchor.offset)
             }
         }
@@ -228,8 +233,10 @@ fun ChatScreen(
     }
 
     var input by rememberSaveable(chatId) { mutableStateOf("") }
-    var attachment by remember(chatId) { mutableStateOf<PendingAttachment?>(null) }
+    var attachments by remember(chatId) { mutableStateOf<List<PendingAttachment>>(emptyList()) }
     var sending by remember(chatId) { mutableStateOf(false) }
+    // 最多两个附件同时上传，其余的排队等信号量。
+    val uploadSlots = remember(chatId) { Semaphore(2) }
 
     var sessionModel by remember(chatId) { mutableStateOf<SessionModel?>(null) }
     var availableModels by remember(chatId) { mutableStateOf<List<ModelEntry>>(emptyList()) }
@@ -272,54 +279,116 @@ fun ChatScreen(
         }
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        val resolver = context.contentResolver
-        var name = "attachment"
-        var size = 0L
-        resolver.query(uri, null, null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                if (nameIndex >= 0) name = cursor.getString(nameIndex) ?: name
-                if (sizeIndex >= 0) size = cursor.getLong(sizeIndex)
+    fun updateAttachment(uri: Uri, transform: (PendingAttachment) -> PendingAttachment) {
+        attachments = attachments.map { if (it.uri == uri) transform(it) else it }
+    }
+
+    // 选中即上传：上传和「发送」解耦，用户还在打字/挑下一批文件时就已经传完了，
+    // 点发送几乎是瞬发。最多两个并发，避免几个大文件一起抢带宽/内存。
+    fun uploadAttachment(item: PendingAttachment) {
+        updateAttachment(item.uri) { it.copy(state = AttachmentState.Uploading) }
+        scope.launch {
+            val result = uploadSlots.withPermit {
+                runCatching {
+                    app.container.api.uploadFile(
+                        fileName = item.name,
+                        mime = item.mime,
+                        contentLength = item.size,
+                        open = {
+                            context.contentResolver.openInputStream(item.uri)
+                                ?: throw IllegalStateException("无法读取附件 ${item.name}")
+                        },
+                    )
+                }.recoverCatching { streamError ->
+                    // 个别 provider 的 content:// 流长度与 OpenableColumns.SIZE 对不上
+                    // （OkHttp 会抛 unexpected end of stream），退回「整块读进内存」上传。
+                    AppLog.w("upload", 
+                        "upload stream failed ${item.name}: " +
+                            "${streamError.javaClass.simpleName}: ${streamError.message} → buffered",
+                    )
+                    val bytes = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(item.uri)
+                            ?.use { it.readBytes() }
+                    } ?: throw IllegalStateException("无法读取附件 ${item.name}")
+                    app.container.api.uploadFileBytes(bytes, item.name, item.mime)
+                }
+            }
+            result.onSuccess { response ->
+                updateAttachment(item.uri) {
+                    it.copy(state = AttachmentState.Done(response.uploadKey))
+                }
+            }.onFailure { e ->
+                val reason = e.message?.takeIf { it.isNotBlank() }
+                    ?: e.javaClass.simpleName
+                AppLog.e("upload", "upload failed ${item.name}: ${e.javaClass.name}: ${e.message}")
+                updateAttachment(item.uri) { it.copy(state = AttachmentState.Failed(reason)) }
+                snackbar.showSnackbar("「${item.name}」上传失败：$reason")
             }
         }
-        val mime = resolver.getType(uri) ?: "application/octet-stream"
-        attachment = PendingAttachment(uri, name, mime, size)
+    }
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents(),
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val resolver = context.contentResolver
+        val picked = uris.mapNotNull { uri ->
+            var name = "attachment"
+            var size = 0L
+            resolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (nameIndex >= 0) name = cursor.getString(nameIndex) ?: name
+                    if (sizeIndex >= 0) size = cursor.getLong(sizeIndex)
+                }
+            }
+            val mime = resolver.getType(uri) ?: "application/octet-stream"
+            PendingAttachment(uri, name, mime, size)
+        }
+        // 同一个文件重复选中（返回同一个 Uri）只保留一份。
+        val fresh = picked.filter { candidate -> attachments.none { it.uri == candidate.uri } }
+        val plan = planAttachmentPick(
+            existingCount = attachments.size,
+            picks = fresh.map { AttachmentPick(it.name, it.size) },
+        )
+        val accepted = plan.acceptedIndices.map { fresh[it] }
+        if (accepted.isNotEmpty()) {
+            attachments = attachments + accepted
+            // 加进列表后立刻开始传（长按/等待都不需要）。
+            accepted.forEach { uploadAttachment(it) }
+        }
+        attachmentRejectionMessage(plan.rejected)?.let { scope.launch { snackbar.showSnackbar(it) } }
     }
 
     fun submit() {
         val text = input.trim()
-        val file = attachment
-        if (text.isEmpty() && file == null) return
+        val files = attachments
+        if (text.isEmpty() && files.isEmpty()) return
+        // 还有附件在上传/排队/失败：不发送，也不静默丢掉它们。
+        val notReady = files.firstOrNull { it.state !is AttachmentState.Done }
+        if (notReady != null) {
+            val reason = when (val s = notReady.state) {
+                is AttachmentState.Failed -> "「${notReady.name}」上传失败，请重试或移除"
+                else -> "「${notReady.name}」还在上传，稍等一下"
+            }
+            scope.launch { snackbar.showSnackbar(reason) }
+            return
+        }
         sending = true
         scope.launch {
             try {
-                var uploadKeys = emptyList<String>()
-                var names = emptyList<String>()
-                var sizes = emptyList<Long>()
-                var mimes = emptyList<String>()
-                if (file != null) {
-                    val bytes = withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(file.uri)?.use { it.readBytes() }
-                    } ?: throw IllegalStateException("无法读取附件")
-                    val uploaded = app.container.api.uploadFile(bytes, file.name, file.mime)
-                    uploadKeys = listOf(uploaded.uploadKey)
-                    names = listOf(file.name)
-                    sizes = listOf(file.size)
-                    mimes = listOf(file.mime)
-                }
                 vm.send(
                     text = text,
-                    uploadKeys = uploadKeys,
-                    fileNames = names,
-                    fileSizes = sizes,
-                    fileMimes = mimes,
+                    uploadKeys = files.map { (it.state as AttachmentState.Done).uploadKey },
+                    fileNames = files.map { it.name },
+                    fileSizes = files.map { it.size },
+                    fileMimes = files.map { it.mime },
                 )
                 input = ""
-                attachment = null
+                attachments = emptyList()
             } catch (e: Exception) {
+                // 失败时保留附件（已上传的 key 仍然有效），用户可以直接重发。
                 snackbar.showSnackbar(e.message ?: "发送失败")
             } finally {
                 sending = false
@@ -356,11 +425,11 @@ fun ChatScreen(
     // animating through the whole history.
     LaunchedEffect(state.loading, itemCount) {
         if (!state.loading && itemCount > 0 && !didInitialScroll) {
-            ChatScrollTrace.record("init pin count=$itemCount ${listState.snapshot()}")
+            AppLog.i("scroll", "init pin count=$itemCount ${listState.snapshot()}")
             listState.scrollToBottom(itemCount)
             didInitialScroll = true
             follow = true
-            ChatScrollTrace.record("init pin done ${listState.snapshot()}")
+            AppLog.i("scroll", "init pin done ${listState.snapshot()}")
         }
     }
 
@@ -377,6 +446,8 @@ fun ChatScreen(
 
     LaunchedEffect(listState) {
         var firstEmission = true
+        var lastPinLogAt = 0L
+        var suppressedPins = 0
         snapshotFlow { latestState.tailFingerprint(latestThinking) }.collect {
             // 首次进入会话的贴底交给上面的 init effect，这里只跟后续增量。
             if (firstEmission) {
@@ -390,18 +461,27 @@ fun ChatScreen(
                     userScrolling = listState.isScrollInProgress,
                 )
             ) {
-                ChatScrollTrace.record("pin skip follow=${latestFollow} loading=${latestState.loading} ${listState.snapshot()}")
                 return@collect
             }
             // 等用户手势/惯性结束再贴底，别和手势抢 LazyListState。
             snapshotFlow { listState.isScrollInProgress }.first { !it }
-            if (!latestFollow) {
-                ChatScrollTrace.record("pin abort follow=false ${listState.snapshot()}")
-                return@collect
-            }
-            ChatScrollTrace.record("pin start count=${latestItemCount} ${listState.snapshot()}")
+            if (!latestFollow) return@collect
+            val before = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
             listState.scrollToBottom(latestItemCount)
-            ChatScrollTrace.record("pin done ${listState.snapshot()}")
+            // 流式输出时贴底每几十毫秒一次，日志必须节流，否则环形缓冲被冲干净。
+            val now = System.currentTimeMillis()
+            if (now - lastPinLogAt >= 2000) {
+                val after = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                AppLog.i(
+                    "scroll",
+                    "pin count=${latestItemCount} moved=${before != after} " +
+                        "suppressed=$suppressedPins ${listState.snapshot()}",
+                )
+                lastPinLogAt = now
+                suppressedPins = 0
+            } else {
+                suppressedPins += 1
+            }
         }
     }
 
@@ -419,15 +499,28 @@ fun ChatScreen(
                 // 用户（或我们自己的滚动）一旦开始就脱离贴底。
                 follow = followAfterUserScroll()
                 scrollEpoch += 1
-                ChatScrollTrace.record("scroll start follow=false ${listState.snapshot()}")
+                AppLog.i("scroll", "scroll start follow=false ${listState.snapshot()}")
             } else if (wasScrolling) {
                 wasScrolling = false
                 val atBottom = listState.isSettledAtBottom()
                 if (atBottom) follow = followAfterSettle(follow = follow, atBottom = true)
-                ChatScrollTrace.record("scroll end atBottom=$atBottom follow=$follow ${listState.snapshot()}")
+                AppLog.i("scroll", "scroll end atBottom=$atBottom follow=$follow ${listState.snapshot()}")
             }
         }
     }
+
+    val attachmentChips = attachments.map {
+        AttachmentChip(
+            name = it.name,
+            uploading = it.state is AttachmentState.Uploading || it.state is AttachmentState.Queued,
+            failed = (it.state as? AttachmentState.Failed)?.reason,
+        )
+    }
+    val uploadingCount = attachments.count {
+        it.state is AttachmentState.Uploading || it.state is AttachmentState.Queued
+    }
+    // 发送按钮只在「每个附件都已经拿到 uploadKey」时可用：失败/上传中的不能静默丢掉。
+    val canSendAttachments = attachmentsReady(attachments.map { it.state })
 
     Scaffold(
         topBar = {
@@ -521,9 +614,16 @@ fun ChatScreen(
                 text = input,
                 onTextChange = { input = it },
                 busy = state.busy,
-                attachmentName = attachment?.name,
+                attachments = attachmentChips,
+                uploadingLabel = if (uploadingCount > 0) "正在上传 $uploadingCount 个附件…" else null,
+                attachmentsReady = canSendAttachments,
                 onPickAttachment = { picker.launch("*/*") },
-                onClearAttachment = { attachment = null },
+                onRemoveAttachment = { index ->
+                    attachments = attachments.filterIndexed { i, _ -> i != index }
+                },
+                onRetryAttachment = { index ->
+                    attachments.getOrNull(index)?.let { uploadAttachment(it) }
+                },
                 onSend = { submit() },
                 onCancel = vm::cancel,
                 sending = sending,
@@ -623,7 +723,10 @@ fun ChatScreen(
                             }
                         }
                         items(state.turns, key = { it.turnId }) { turn ->
-                            TurnBlock(turn)
+                            val liveTurnId = state.liveTurnId.takeIf { it > 0L }
+                                ?: state.turns.lastOrNull()?.turnId
+                                ?: 0L
+                            TurnBlock(turn = turn, running = state.busy && turn.turnId == liveTurnId)
                         }
                         state.pendingUserText?.let { pending ->
                             item(key = "pending_user") {
@@ -740,28 +843,41 @@ fun ChatScreen(
 }
 
 /**
- * LazyList `scrollToItem(last)` aligns the TOP of the last item. A turn can be
- * taller than the viewport (many iterations), so that is not the bottom of the
- * conversation — both "top" and "bottom" appeared to jump to the top for long
- * turns. Scroll by a large delta afterwards; LazyList clamps at the real end.
+ * 滚到「真正的底部」。
  *
- * 关键顺序问题：`scrollToItem` 只强求「最后一项的顶部」对齐，而它触发的 measure
- * 要等**下一帧的 layout** 之后才生效；在那之前 `canScrollForward` / `scrollBy`
- * 用的都是**旧位置**的测量结果。跟随状态下旧位置本来就在底部 → 读到 false →
- * 紧接的 `scrollBy` 一个像素都不消费 → 停在最后一项的顶部（新一轮对话里就是
- * 用户那条消息，看起来像「跳到了用户信息」）。`withFrameNanos` 回调也排在
- * layout 之前，所以必须多等一帧才能看到新布局。
+ * 关键：**最后一项已经可见时绝不能用 `scrollToItem`**。它只把该项的**顶部**对齐
+ * 视口顶部，而邀请到真实底部的 `scrollBy` 要到下一帧才生效 —— 中间会渲染出一帧
+ * 「跳到这条消息开头」。流式输出时贴底每几十毫秒一次，看起来就是持续抖动
+ * （日志里 `pin start`/`pin done` 每秒十几对，`canFwd=false` 却还在 pin）。
+ *
+ * 所以：
+ * - 最后一项可见 → 只补「内容超出视口底部的距离」（一次 `scrollBy`，同帧生效）；
+ * - 最后一项还不可见（新回合、从顶部回到底部）→ 先 `scrollToItem` 定位，等布局
+ *   落地后再补差距。
  */
 private suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToBottom(itemCount: Int) {
     if (itemCount <= 0) return
-    scrollToItem(itemCount - 1)
-    repeat(3) {
-        // 第 1 个 withFrameNanos 让 scrollToItem 的 remeasure 进入这一帧的 layout，
-        // 第 2 个让出到 layout 之后，此时 canScrollForward / scrollBy 才是新位置的值。
+    val lastIndex = itemCount - 1
+    val info = layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull()
+
+    if (last != null && last.index == lastIndex) {
+        val deficit = last.offset + last.size - info.viewportEndOffset
+        if (deficit > 0) scrollBy(deficit.toFloat())
+        return
+    }
+
+    scrollToItem(lastIndex)
+    repeat(2) {
+        // scrollToItem 触发的 measure 要到下一帧 layout 之后才生效
+        // （withFrameNanos 回调本身排在 layout 之前，所以要等两帧）。
         withFrameNanos { }
         withFrameNanos { }
-        if (!canScrollForward) return
-        scrollBy(100_000f)
+        val now = layoutInfo
+        val tail = now.visibleItemsInfo.lastOrNull() ?: return
+        val deficit = tail.offset + tail.size - now.viewportEndOffset
+        if (deficit <= 0) return
+        scrollBy(deficit.toFloat())
     }
 }
 
@@ -792,25 +908,30 @@ private fun LazyListState.isSettledAtBottom(): Boolean {
 }
 
 @Composable
-private fun TurnBlock(turn: TurnUi) {
+private fun TurnBlock(turn: TurnUi, running: Boolean) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (turn.userText.isNotBlank()) {
             UserBubble(turn.userText)
         }
-        turn.iterations.forEach { iteration ->
-            IterationBlock(iteration)
+
+        val answer = turn.finalAnswerText()
+        val process = turn.process()
+        if (!process.isEmpty) {
+            ProcessBlock(turn = turn, process = process, answer = answer, running = running)
         }
-        val lastContent = turn.iterations.lastOrNull()?.content.orEmpty()
-        if (turn.finalText.isNotBlank() && turn.finalText != lastContent) {
-            CopyOrSelectText(text = turn.finalText) {
+
+        // 最终答复永远显示，不参与折叠。
+        if (answer.isNotBlank()) {
+            CopyOrSelectText(text = answer) {
                 MarkdownText(
-                    text = turn.finalText,
+                    text = answer,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
                 )
             }
         }
+
         if (turn.cancelled) {
             Text(
                 "已取消",
@@ -822,27 +943,79 @@ private fun TurnBlock(turn: TurnUi) {
     }
 }
 
+/**
+ * 一轮里的「过程」（思考 / 过程旁白 / 工具调用）整体折叠成一行。
+ *
+ * 手机上过程逐条铺开要占半屏（3 思考 + 6 工具 ≈ 350dp），所以默认折叠；
+ * **运行中自动展开**（要看实时进度），跑完自动收起；用户手动点过之后按用户的来。
+ */
 @Composable
-private fun IterationBlock(iteration: IterationUi) {
+private fun ProcessBlock(
+    turn: TurnUi,
+    process: TurnProcess,
+    answer: String,
+    running: Boolean,
+) {
+    // null = 跟随运行状态自动展开/收起
+    var manual by remember(turn.turnId) { mutableStateOf<Boolean?>(null) }
+    val expanded = manual ?: running
+    val currentTool = turn.iterations.asReversed()
+        .firstNotNullOfOrNull { iteration -> iteration.tools.lastOrNull { it.running }?.title }
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (iteration.reasoning.isNotBlank()) {
-            ReasoningBlock(iteration.reasoning)
-        }
-        if (iteration.tools.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                iteration.tools.forEach { tool ->
-                    ToolCard(tool)
-                }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { manual = !expanded }
+                .padding(horizontal = 6.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起过程" else "展开过程",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(2.dp))
+            Text(
+                processLabel(process, running, currentTool),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (running) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
-        if (iteration.content.isNotBlank()) {
-            CopyOrSelectText(text = iteration.content) {
-                MarkdownText(
-                    text = iteration.content,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp),
-                )
+
+        if (expanded) {
+            turn.iterations.forEach { iteration ->
+                // 顺序跟模型真实产出一致：思考 → 正文 → 工具（0.4.11 的约定）。
+                if (iteration.reasoning.isNotBlank()) {
+                    ReasoningBlock(iteration.reasoning)
+                }
+                if (iteration.content.isNotBlank() && iteration.content != answer) {
+                    CopyOrSelectText(text = iteration.content) {
+                        MarkdownText(
+                            text = iteration.content,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp),
+                        )
+                    }
+                }
+                if (iteration.tools.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        iteration.tools.forEach { tool -> ToolCard(tool) }
+                    }
+                }
             }
         }
     }
